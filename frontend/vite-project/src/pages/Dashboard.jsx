@@ -30,12 +30,11 @@ const WMO_LABEL = {
 // WeatherWidget — live card with hover dropdown
 // ---------------------------------------------------------------------------
 const WeatherWidget = ({ coords }) => {
-  const [wx, setWx]         = useState(null);
+  const [wx, setWx]           = useState(null);
   const [loading, setLoading] = useState(true);
-  const [open, setOpen]     = useState(false);
-  const ref                 = useRef(null);
+  const [open, setOpen]       = useState(false);
+  const ref                   = useRef(null);
 
-  // Default to Guwahati if no user location yet
   const lat = coords?.lat ?? 26.1445;
   const lon = coords?.lon ?? 91.7362;
 
@@ -52,152 +51,122 @@ const WeatherWidget = ({ coords }) => {
       .then(r => r.json())
       .then(data => {
         const c = data.current;
-        // rain chance = max of first 6 hours
-        const rainProb = Math.max(...(data.hourly?.precipitation_probability?.slice(0,6) ?? [0]));
+        const rainProb = Math.max(...(data.hourly?.precipitation_probability?.slice(0, 6) ?? [0]));
         setWx({
-          temp:      Math.round(c.temperature_2m),
-          feelsLike: Math.round(c.apparent_temperature),
-          humidity:  c.relative_humidity_2m,
-          rainfall:  c.precipitation,
+          temp:       Math.round(c.temperature_2m),
+          feelsLike:  Math.round(c.apparent_temperature),
+          humidity:   c.relative_humidity_2m,
+          rainfall:   c.precipitation,
           rainChance: rainProb,
-          wind:      Math.round(c.windspeed_10m),
-          uv:        c.uv_index,
-          code:      c.weathercode,
-          label:     WMO_LABEL[c.weathercode] ?? 'Unknown',
+          wind:       Math.round(c.windspeed_10m),
+          uv:         c.uv_index,
+          label:      WMO_LABEL[c.weathercode] ?? 'Unknown',
         });
         setLoading(false);
       })
       .catch(() => setLoading(false));
   }, [lat, lon]);
 
-  // Close dropdown on outside click
+  // Close on outside click
   useEffect(() => {
-    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
   }, []);
 
-  const uvColor = !wx ? '#888' : wx.uv <= 2 ? '#22c55e' : wx.uv <= 5 ? '#f59e0b' : wx.uv <= 7 ? '#f97316' : '#ef4444';
+  const uvColor   = !wx ? '#888' : wx.uv <= 2 ? '#22c55e' : wx.uv <= 5 ? '#f59e0b' : wx.uv <= 7 ? '#f97316' : '#ef4444';
   const rainColor = !wx ? '#888' : wx.rainChance < 30 ? '#22c55e' : wx.rainChance < 60 ? '#f59e0b' : '#3b82f6';
 
   return (
-    <div ref={ref} style={{ position: 'relative' }}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
-      {/* Card face */}
-      <div className="card kpi-card" style={{ cursor: 'default', userSelect: 'none', minWidth: 160 }}>
-        <div className="kpi-icon info" style={{ background: 'linear-gradient(135deg,#1E6FA8,#2C8FD1)', color: '#fff' }}>
-          <Thermometer size={22} />
+    <div ref={ref} style={{ position: 'relative', width: '100%' }}>
+      {/* Collapsed card — click to toggle */}
+      <div
+        className="card"
+        onClick={() => wx && setOpen(o => !o)}
+        style={{
+          cursor: wx ? 'pointer' : 'default',
+          padding: '14px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 14,
+          userSelect: 'none',
+          borderBottom: open ? '1.5px solid #D6EAF9' : undefined,
+          borderBottomLeftRadius: open ? 0 : undefined,
+          borderBottomRightRadius: open ? 0 : undefined,
+        }}
+      >
+        {/* Icon */}
+        <div style={{
+          width: 42, height: 42, borderRadius: 10, flexShrink: 0,
+          background: 'linear-gradient(135deg,#1E6FA8,#2C8FD1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Thermometer size={20} color="#fff" />
         </div>
-        <div>
-          {loading ? (
-            <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-secondary)' }}>—°C</div>
-          ) : wx ? (
-            <>
-              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--ink)' }}>{wx.temp}°C</div>
-              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: 1 }}>
-                {wx.label} · Feels {wx.feelsLike}°C
-              </div>
-            </>
-          ) : (
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Weather unavailable</div>
-          )}
-          <div style={{ fontSize: '0.72rem', color: 'var(--sky)', marginTop: 2, fontWeight: 600 }}>Hover for details ↗</div>
+
+        {/* Text */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ fontSize: '1.45rem', fontWeight: 700, color: '#14263B', lineHeight: 1 }}>
+              {loading ? '—' : wx ? `${wx.temp}°C` : '—'}
+            </span>
+            {wx && (
+              <span style={{ fontSize: '0.75rem', color: '#5C7288' }}>Feels {wx.feelsLike}°C</span>
+            )}
+          </div>
+          <div style={{ fontSize: '0.78rem', color: '#5C7288', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {loading ? 'Loading weather…' : wx ? wx.label : 'Unavailable'}
+          </div>
         </div>
+
+        {/* Rain badge + chevron */}
+        {wx && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#EAF4FC', borderRadius: 6, padding: '3px 8px' }}>
+              <CloudRain size={12} color={rainColor} />
+              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: rainColor }}>{wx.rainChance}%</span>
+            </div>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A6B8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+              style={{ transform: open ? 'rotate(180deg)' : 'rotate(0)', transition: 'transform .2s' }}>
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </div>
+        )}
       </div>
 
-      {/* Hover dropdown */}
+      {/* Expanded detail panel */}
       {open && wx && (
         <div style={{
-          position: 'absolute', top: '100%', left: 0, zIndex: 2000,
-          marginTop: 6, minWidth: 240,
           background: '#fff',
           border: '1.5px solid #D6EAF9',
-          borderRadius: 12,
-          boxShadow: '0 8px 32px rgba(30,111,168,0.18)',
-          padding: '14px 16px',
+          borderTop: 'none',
+          borderBottomLeftRadius: 12,
+          borderBottomRightRadius: 12,
+          padding: '12px 16px 14px',
           animation: 'fadeInDown .15s ease',
         }}>
-          {/* Header */}
-          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#14263B', marginBottom: 10,
-            borderBottom: '1px solid #EAF4FC', paddingBottom: 8,
-            display: 'flex', alignItems: 'center', gap: 6 }}>
-            <CloudRain size={15} color="#2C8FD1" />
-            Weather — {coords ? 'Your location' : 'Guwahati (default)'}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px 0' }}>
+            {[
+              { icon: <Droplets size={13} color="#2C8FD1" />, label: 'Humidity',    value: `${wx.humidity}%`,    color: '#14263B' },
+              { icon: <Wind     size={13} color="#64748b" />, label: 'Wind',        value: `${wx.wind} km/h`,    color: '#14263B' },
+              { icon: <Eye      size={13} color={uvColor}  />, label: 'UV Index',  value: `${wx.uv}`,            color: uvColor   },
+              { icon: <CloudRain size={13} color={rainColor} />, label: 'Rain Chance', value: `${wx.rainChance}%`, color: rainColor },
+              { icon: <Droplets size={13} color="#3b82f6"  />, label: 'Rainfall',  value: `${wx.rainfall} mm`,  color: '#14263B' },
+              { icon: <Thermometer size={13} color="#f97316" />, label: 'Feels Like', value: `${wx.feelsLike}°C`, color: '#14263B' },
+            ].map(({ icon, label, value, color }) => (
+              <div key={label} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                {icon}
+                <div style={{ fontSize: '0.62rem', color: '#94A6B8', textAlign: 'center' }}>{label}</div>
+                <div style={{ fontSize: '0.82rem', fontWeight: 700, color }}>{value}</div>
+              </div>
+            ))}
           </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 14px' }}>
-            {/* Rainfall chance */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <CloudRain size={14} color={rainColor} />
-              <div>
-                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>Rain Chance</div>
-                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: rainColor }}>{wx.rainChance}%</div>
-              </div>
+          {wx.rainChance > 50 && (
+            <div style={{ marginTop: 10, padding: '5px 10px', background: '#FEF2F2', borderRadius: 6,
+              fontSize: '0.72rem', color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <CloudRain size={11} /> Rain likely today
             </div>
-
-            {/* Humidity */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Droplets size={14} color="#2C8FD1" />
-              <div>
-                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>Humidity</div>
-                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#14263B' }}>{wx.humidity}%</div>
-              </div>
-            </div>
-
-            {/* Wind */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Wind size={14} color="#64748b" />
-              <div>
-                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>Wind Speed</div>
-                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#14263B' }}>{wx.wind} km/h</div>
-              </div>
-            </div>
-
-            {/* UV Index */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Eye size={14} color={uvColor} />
-              <div>
-                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>UV Index</div>
-                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: uvColor }}>{wx.uv}</div>
-              </div>
-            </div>
-
-            {/* Rainfall today */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Droplets size={14} color="#3b82f6" />
-              <div>
-                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>Rainfall Today</div>
-                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#14263B' }}>{wx.rainfall} mm</div>
-              </div>
-            </div>
-
-            {/* Feels like */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Thermometer size={14} color="#f97316" />
-              <div>
-                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>Feels Like</div>
-                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#14263B' }}>{wx.feelsLike}°C</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Condition bar */}
-          <div style={{
-            marginTop: 10, padding: '7px 10px',
-            background: '#EAF4FC', borderRadius: 7,
-            fontSize: '0.78rem', color: '#1E6FA8', fontWeight: 600,
-            display: 'flex', alignItems: 'center', gap: 6,
-          }}>
-            <CloudRain size={12} />
-            {wx.label}
-            {wx.rainChance > 50 && <span style={{ marginLeft: 'auto', color: '#ef4444', fontWeight: 700 }}>⚠ Rain likely</span>}
-          </div>
-
-          <div style={{ fontSize: '0.65rem', color: '#94A6B8', marginTop: 6, textAlign: 'right' }}>
-            Source: Open-Meteo · updated now
-          </div>
+          )}
         </div>
       )}
     </div>
@@ -486,8 +455,6 @@ export const Dashboard = () => {
             </KpiPopover>
           );
         })}
-        {/* Live weather widget */}
-        <WeatherWidget coords={coords} />
       </div>
 
       {/* Main Map Area */}
@@ -535,6 +502,9 @@ export const Dashboard = () => {
 
       {/* Side Panels */}
       <div className="side-panel">
+        {/* Weather Widget — above Risk Alerts */}
+        <WeatherWidget coords={coords} />
+
         <div className="card">
           <div className="card-header">
             <div className="card-title">
