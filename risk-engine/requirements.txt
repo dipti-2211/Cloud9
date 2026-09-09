@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+rasterio
+xarray
+netCDF4
+joblib
+scikit-learn==1.6.1
+pandas
+numpy

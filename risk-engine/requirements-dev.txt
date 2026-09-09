@@ -1,0 +1,6 @@
+# One-time offline precompute dependencies — NOT needed by the live API
+# Install with: pip install -r requirements-dev.txt
+pyrosm
+geopandas
+shapely
+scipy

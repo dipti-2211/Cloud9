@@ -1,0 +1,18 @@
+{
+  "name": "cloud9-ner-logistics-intelligence",
+  "version": "1.0.0",
+  "description": "AI-powered logistics and accessibility intelligence platform for India's North Eastern Region",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install && npm --prefix backend install && npm --prefix frontend/vite-project install",
+    "dev": "concurrently -n \"backend,frontend\" -c \"blue,cyan\" \"npm --prefix backend run dev\" \"npm --prefix frontend/vite-project run dev\"",
+    "start": "concurrently -n \"backend,frontend\" -c \"blue,cyan\" \"npm --prefix backend start\" \"npm --prefix frontend/vite-project run dev\"",
+    "backend": "npm --prefix backend run dev",
+    "frontend": "npm --prefix frontend/vite-project run dev",
+    "seed:admin": "npm --prefix backend run seed:admin",
+    "seed:demo-alerts": "npm --prefix backend run seed:demo-alerts"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

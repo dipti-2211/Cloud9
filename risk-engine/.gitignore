@@ -1,0 +1,18 @@
+# Derived rasters produced by precompute_layers.py
+data/slope.tif
+data/aspect.tif
+data/dist_to_road.tif
+data/_dist_to_road_utm.tif
+
+# Source data files — large binaries, keep out of git
+data/*.pkl
+data/*.nc
+data/*.pbf
+data/*.tif
+data/.gitkeep
+
+# Python virtualenv
+.venv/
+__pycache__/
+*.pyc
+*.pyo

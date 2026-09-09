@@ -1,0 +1,92 @@
+[
+  {
+    "name": "Near Retzol, Retzol, Haflong",
+    "lat": 25.110111,
+    "lon": 92.998778,
+    "riskCategory": "Very High",
+    "riskPercentage": 100.0,
+    "type": "risky",
+    "features": {
+      "elevation": 560.5,
+      "slope": 25.62,
+      "aspect": 308.4,
+      "dist_to_road": 4.7,
+      "rainfall": 8.0546
+    }
+  },
+  {
+    "name": "Near Chhota Kapurchhara, Haflong",
+    "lat": 25.108972,
+    "lon": 92.928861,
+    "riskCategory": "Very High",
+    "riskPercentage": 100.0,
+    "type": "risky",
+    "features": {
+      "elevation": 253.2,
+      "slope": 10.74,
+      "aspect": 333.2,
+      "dist_to_road": 5.6,
+      "rainfall": 8.0546
+    }
+  },
+  {
+    "name": "Near Prasadimdik, Maibong",
+    "lat": 25.444194,
+    "lon": 93.424694,
+    "riskCategory": "Very High",
+    "riskPercentage": 100.0,
+    "type": "risky",
+    "features": {
+      "elevation": 410.5,
+      "slope": 26.94,
+      "aspect": 315.3,
+      "dist_to_road": 15.1,
+      "rainfall": 3.3147
+    }
+  },
+  {
+    "name": "Near Langkri, Umrangso",
+    "lat": 25.731337,
+    "lon": 92.869504,
+    "riskCategory": "Very Low",
+    "riskPercentage": 0.0,
+    "type": "safe",
+    "features": {
+      "elevation": 123.2,
+      "slope": 1.05,
+      "aspect": 97.8,
+      "dist_to_road": 251.4,
+      "rainfall": 3.3001
+    }
+  },
+  {
+    "name": "Near Maibong, Dima Hasao",
+    "lat": 25.334035,
+    "lon": 93.423335,
+    "riskCategory": "Very Low",
+    "riskPercentage": 0.0,
+    "type": "safe",
+    "features": {
+      "elevation": 1242.4,
+      "slope": 36.38,
+      "aspect": 301.6,
+      "dist_to_road": 3149.0,
+      "rainfall": 3.7085
+    }
+  },
+  {
+    "name": "Near Umrangso, Dima Hasao",
+    "lat": 25.716848,
+    "lon": 92.854846,
+    "riskCategory": "Very Low",
+    "riskPercentage": 0.0,
+    "type": "safe",
+    "features": {
+      "elevation": 136.8,
+      "slope": 4.39,
+      "aspect": 189.4,
+      "dist_to_road": 2097.8,
+      "rainfall": 3.3001
+    }
+  }
+]

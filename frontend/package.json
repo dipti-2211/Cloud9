@@ -1,0 +1,13 @@
+{
+  "name": "frontend-wrapper",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix vite-project run dev",
+    "start": "npm --prefix vite-project run dev",
+    "build": "npm --prefix vite-project run build",
+    "lint": "npm --prefix vite-project run lint",
+    "preview": "npm --prefix vite-project run preview",
+    "install:all": "npm --prefix vite-project install"
+  }
+}
