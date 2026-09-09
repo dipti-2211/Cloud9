@@ -8,6 +8,7 @@ import { PageHeader } from '../components/common/PageHeader';
 import { DigitalIdCard } from '../components/personnel/DigitalIdCard';
 import { Camera, User, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { authAPI } from '../services/api';
 
 const INITIAL = {
   // Personal
@@ -75,19 +76,24 @@ export const RegisterFieldOfficer = () => {
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validate()) { toast.error('Please fill all required fields.'); return; }
-    const person = { ...form, id: form.userId };
-    if (editMode) {
-      setRecords(r => r.map(p => p.id === person.id ? person : p));
-      toast.success('Record updated.');
-    } else {
-      setRecords(r => [...r, person]);
-      toast.success('Field officer registered.');
+    try {
+      await authAPI.register({ ...form, role: 'Field Officer' });
+      const person = { ...form, id: form.userId };
+      if (editMode) {
+        setRecords(r => r.map(p => p.id === person.id ? person : p));
+        toast.success('Record updated.');
+      } else {
+        setRecords(r => [...r, person]);
+        toast.success('Field officer registered. Awaiting admin approval.');
+      }
+      setSubmitted(person);
+      setEditMode(false);
+    } catch (err) {
+      toast.error(err.message || 'Registration failed.');
     }
-    setSubmitted(person);
-    setEditMode(false);
   };
 
   const handleEdit = (person) => {

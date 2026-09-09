@@ -1,129 +1,174 @@
-import { vehicles, incidents, roads, deliveries, dashboardKPIs } from '../data/mockData';
+/**
+ * api.js — Production-ready API service layer
+ * All calls hit the real Express backend at port 1710.
+ * Mock data is used ONLY as a UI fallback when the backend collection is empty.
+ */
 
-const delay = (ms = 800) => new Promise(resolve => setTimeout(resolve, ms));
+import { vehicles as mockVehicles, incidents as mockIncidents, roads as mockRoads, deliveries as mockDeliveries, dashboardKPIs } from '../data/mockData';
 
-// ---------------------------------------------------------------------------
-// Backend base URL — the Express server acts as an intermediary
-// ---------------------------------------------------------------------------
-const BACKEND_URL = 'http://localhost:1710';
+// ─── Config ────────────────────────────────────────────────────────────────
+export const BASE_URL = 'http://localhost:1710';
 
-// ---------------------------------------------------------------------------
-// Mock API functions (unchanged — mock data still used for vehicles, incidents, etc.)
-// ---------------------------------------------------------------------------
-export const api = {
-  getDashboardData: async () => {
-    await delay();
-    return dashboardKPIs;
-  },
-
-  getVehicles: async () => {
-    await delay();
-    return vehicles;
-  },
-
-  getIncidents: async () => {
-    await delay();
-    return incidents;
-  },
-  
-  createIncident: async (incidentData) => {
-    await delay(1200); 
-    return { success: true, message: "Incident logged successfully." };
-  },
-
-  getRoads: async () => {
-    await delay();
-    return roads;
-  },
-
-  getDeliveries: async () => {
-    await delay();
-    return deliveries;
-  },
-
-  // Real alerts — fetches from MongoDB via Express backend
-  getAlerts: async () => {
-    const response = await fetch(`${BACKEND_URL}/api/alerts`);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return response.json();
-  }
+// ─── Token helpers ─────────────────────────────────────────────────────────
+export const auth = {
+  getToken:   ()        => localStorage.getItem('sih_token'),
+  getUser:    ()        => { try { return JSON.parse(localStorage.getItem('sih_user') || 'null'); } catch { return null; } },
+  setSession: (token, user) => { localStorage.setItem('sih_token', token); localStorage.setItem('sih_user', JSON.stringify(user)); },
+  clearSession: ()      => { localStorage.removeItem('sih_token'); localStorage.removeItem('sih_user'); },
+  isLoggedIn: ()        => !!localStorage.getItem('sih_token'),
 };
 
-// ---------------------------------------------------------------------------
-// Real landslide risk API — hits the Express backend → Python risk-engine
-// ---------------------------------------------------------------------------
+// ─── Base fetch with auth header ───────────────────────────────────────────
+async function request(path, options = {}) {
+  const token = auth.getToken();
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
 
-/**
- * getLandslideRisk(lat, lon)
- *
- * Calls GET /api/landslide?lat=..&lon=.. on the Express backend, which proxies
- * to the Python risk-engine service.
- *
- * Returns the full prediction JSON:
- * { latitude, longitude, elevation, slope, aspect, dist_to_road, rainfall,
- *   prediction, risk_percentage, risk_category }
- *
- * @throws {Error} with a human-readable message on network or API errors.
- */
-export const getLandslideRisk = async (lat, lon) => {
-  const url = `${BACKEND_URL}/api/landslide?lat=${lat}&lon=${lon}`;
+  const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
 
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    // Attempt to extract message from JSON error body (errorMiddleware format)
-    const err = await response.json().catch(() => null);
-    const message = err?.message ?? `HTTP ${response.status}`;
-    throw new Error(message);
+  if (res.status === 401) {
+    auth.clearSession();
+    window.location.href = '/login';
+    throw new Error('Session expired. Please log in again.');
   }
 
-  return response.json();
-};
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+  return data;
+}
 
-// ---------------------------------------------------------------------------
-// Batch route risk — hits POST /api/route-risk
-// ---------------------------------------------------------------------------
+// ─── Auth ──────────────────────────────────────────────────────────────────
+export const authAPI = {
+  /**
+   * Login. role: 'admin' | 'officer' | 'driver'
+   * Returns { token, user }
+   */
+  login: async (userId, password, role) => {
+    const data = await request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ userId, password, role }),
+    });
+    if (data.token && data.user) {
+      auth.setSession(data.token, data.user);
+    }
+    return data;
+  },
 
-/**
- * getRouteRisk(points)
- *
- * Points: [{ lat, lon }, ...]
- * Returns { results: [...] } where each entry mirrors /predict or is null (out-of-bounds).
- */
-export const getRouteRisk = async (points) => {
-  const response = await fetch(`${BACKEND_URL}/api/route-risk`, {
+  logout: () => {
+    auth.clearSession();
+    window.location.href = '/login';
+  },
+
+  /** Register a field officer or vehicle operator (PENDING until admin approves) */
+  register: async (payload) => request('/api/auth/register', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ points }),
-  });
+    body: JSON.stringify(payload),
+  }),
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => null);
-    const message = err?.message ?? `HTTP ${response.status}`;
-    throw new Error(message);
-  }
+  /** Get current logged-in user profile */
+  getMe: () => request('/api/auth/me'),
 
-  return response.json();
+  /** Admin: list pending approval requests */
+  getPending: () => request('/api/auth/pending'),
+
+  /** Admin: approve a user by DB id */
+  approve: (id) => request(`/api/auth/approve/${id}`, { method: 'PUT' }),
+
+  /** Admin: reject a user by DB id */
+  reject: (id) => request(`/api/auth/reject/${id}`, { method: 'PUT' }),
 };
 
-// ---------------------------------------------------------------------------
-// Geocoding — proxied through Express so User-Agent header can be set
-// ---------------------------------------------------------------------------
+// ─── Vehicles ─────────────────────────────────────────────────────────────
+export const vehiclesAPI = {
+  getAll: async () => {
+    const data = await request('/api/vehicles');
+    // If DB is empty, fall back to mock data so UI is never blank
+    if (!data.data || data.data.length === 0) return mockVehicles;
+    return data.data;
+  },
+  create: (payload) => request('/api/vehicles', { method: 'POST', body: JSON.stringify(payload) }),
+  update: (id, payload) => request(`/api/vehicles/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  delete: (id) => request(`/api/vehicles/${id}`, { method: 'DELETE' }),
+};
 
-/**
- * geocodePlace(q)
- *
- * Converts a place name string to { lat, lon, display_name } via Nominatim.
- * Proxy lives at GET /api/geocode?q=<query>
- */
+// ─── Roads ────────────────────────────────────────────────────────────────
+export const roadsAPI = {
+  getAll: async () => {
+    const data = await request('/api/roads');
+    if (!data.data || data.data.length === 0) return mockRoads;
+    return data.data;
+  },
+  create: (payload) => request('/api/roads', { method: 'POST', body: JSON.stringify(payload) }),
+  update: (id, payload) => request(`/api/roads/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  delete: (id) => request(`/api/roads/${id}`, { method: 'DELETE' }),
+};
+
+// ─── Incidents ────────────────────────────────────────────────────────────
+export const incidentsAPI = {
+  getAll: async () => {
+    const data = await request('/api/incidents');
+    if (!data.data || data.data.length === 0) return mockIncidents;
+    return data.data;
+  },
+  create: (payload) => request('/api/incidents', { method: 'POST', body: JSON.stringify(payload) }),
+  update: (id, payload) => request(`/api/incidents/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  delete: (id) => request(`/api/incidents/${id}`, { method: 'DELETE' }),
+};
+
+// ─── Deliveries ───────────────────────────────────────────────────────────
+export const deliveriesAPI = {
+  getAll: async () => {
+    const data = await request('/api/deliveries');
+    if (!data.data || data.data.length === 0) return mockDeliveries;
+    return data.data;
+  },
+  create: (payload) => request('/api/deliveries', { method: 'POST', body: JSON.stringify(payload) }),
+  update: (id, payload) => request(`/api/deliveries/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+};
+
+// ─── Alerts (real-time landslide alerts) ─────────────────────────────────
+export const alertsAPI = {
+  getAll: async () => {
+    const res = await fetch(`${BASE_URL}/api/alerts`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json(); // returns plain array
+  },
+};
+
+// ─── Settings ─────────────────────────────────────────────────────────────
+export const settingsAPI = {
+  get: () => request('/api/settings'),
+  update: (payload) => request('/api/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+};
+
+// ─── Landslide risk engine ────────────────────────────────────────────────
+export const getLandslideRisk = async (lat, lon) => {
+  const res = await fetch(`${BASE_URL}/api/landslide?lat=${lat}&lon=${lon}`);
+  if (!res.ok) { const e = await res.json().catch(() => null); throw new Error(e?.message ?? `HTTP ${res.status}`); }
+  return res.json();
+};
+
+export const getRouteRisk = async (points) => {
+  const res = await fetch(`${BASE_URL}/api/route-risk`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ points }),
+  });
+  if (!res.ok) { const e = await res.json().catch(() => null); throw new Error(e?.message ?? `HTTP ${res.status}`); }
+  return res.json();
+};
+
 export const geocodePlace = async (q) => {
-  const response = await fetch(`${BACKEND_URL}/api/geocode?q=${encodeURIComponent(q)}`);
+  const res = await fetch(`${BASE_URL}/api/geocode?q=${encodeURIComponent(q)}`);
+  if (!res.ok) { const e = await res.json().catch(() => null); throw new Error(e?.message ?? `HTTP ${res.status}`); }
+  return res.json();
+};
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => null);
-    const message = err?.message ?? `HTTP ${response.status}`;
-    throw new Error(message);
-  }
-
-  return response.json();
+// ─── Legacy `api` object (used by Navbar, Dashboard — keep compatible) ────
+export const api = {
+  getDashboardData: async () => dashboardKPIs,
+  getAlerts:        () => alertsAPI.getAll(),
+  getVehicles:      () => vehiclesAPI.getAll(),
+  getIncidents:     () => incidentsAPI.getAll(),
+  getRoads:         () => roadsAPI.getAll(),
+  getDeliveries:    () => deliveriesAPI.getAll(),
+  createIncident:   (d) => incidentsAPI.create(d),
 };

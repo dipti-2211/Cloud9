@@ -9,6 +9,7 @@ import { PageHeader } from '../components/common/PageHeader';
 import { DigitalIdCard } from '../components/personnel/DigitalIdCard';
 import { Camera, User, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { authAPI } from '../services/api';
 
 // TODO: confirm exact fields for this section
 const INITIAL = {
@@ -63,19 +64,24 @@ export const RegisterVehicleOperator = () => {
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validate()) { toast.error('Please fill all required fields.'); return; }
-    const person = { ...form, id: form.userId };
-    if (editMode) {
-      setRecords(r => r.map(p => p.id === person.id ? person : p));
-      toast.success('Record updated.');
-    } else {
-      setRecords(r => [...r, person]);
-      toast.success('Vehicle operator registered.');
+    try {
+      await authAPI.register({ ...form, role: 'Vehicle Operator' });
+      const person = { ...form, id: form.userId };
+      if (editMode) {
+        setRecords(r => r.map(p => p.id === person.id ? person : p));
+        toast.success('Record updated.');
+      } else {
+        setRecords(r => [...r, person]);
+        toast.success('Vehicle operator registered. Awaiting admin approval.');
+      }
+      setSubmitted(person);
+      setEditMode(false);
+    } catch (err) {
+      toast.error(err.message || 'Registration failed.');
     }
-    setSubmitted(person);
-    setEditMode(false);
   };
 
   const handleEdit = (person) => { setForm(person); setSubmitted(null); setEditMode(true); window.scrollTo({ top: 0, behavior: 'smooth' }); };

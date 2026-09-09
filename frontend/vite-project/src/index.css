@@ -6,6 +6,9 @@
 
 /* ── Design tokens ─────────────────────────────────────────────────────────── */
 :root {
+  /* Force light color scheme — prevent OS dark mode from overriding our theme */
+  color-scheme: light only;
+
   /* Brand palette */
   --sky:        #2C8FD1;
   --sky-dark:   #1E6FA8;
@@ -57,6 +60,7 @@ html, body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
+  color-scheme: light;
 }
 
 /* ==========================================================================
