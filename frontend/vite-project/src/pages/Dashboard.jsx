@@ -1,16 +1,207 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardKPIs, vehicles, roads, incidents } from '../data/mockData';
 import { api } from '../services/api';
 import { Badge } from '../components/common/Badge';
 import { MapPanel } from '../components/map/MapPanel';
 import { useUserLocation } from '../hooks/useUserLocation';
-import { Truck, Clock, AlertTriangle, Activity, Bell, MapPin, RefreshCw, Navigation } from 'lucide-react';
+import { Truck, Clock, AlertTriangle, Activity, Bell, MapPin, RefreshCw, Navigation, CloudRain, Wind, Droplets, Thermometer, Eye } from 'lucide-react';
 import demoLocations from '../data/demoLocations.json';
 import { KpiPopover } from '../components/dashboard/KpiPopover';
 
 const iconMap = {
   truck: Truck, clock: Clock, 'alert-triangle': AlertTriangle, activity: Activity, bell: Bell
+};
+
+// ---------------------------------------------------------------------------
+// WMO weather code → label
+// ---------------------------------------------------------------------------
+const WMO_LABEL = {
+  0:'Clear sky',1:'Mainly clear',2:'Partly cloudy',3:'Overcast',
+  45:'Foggy',48:'Rime fog',
+  51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',
+  61:'Light rain',63:'Rain',65:'Heavy rain',
+  71:'Light snow',73:'Snow',75:'Heavy snow',
+  80:'Light showers',81:'Showers',82:'Heavy showers',
+  95:'Thunderstorm',96:'Thunderstorm w/ hail',99:'Heavy thunderstorm',
+};
+
+// ---------------------------------------------------------------------------
+// WeatherWidget — live card with hover dropdown
+// ---------------------------------------------------------------------------
+const WeatherWidget = ({ coords }) => {
+  const [wx, setWx]         = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen]     = useState(false);
+  const ref                 = useRef(null);
+
+  // Default to Guwahati if no user location yet
+  const lat = coords?.lat ?? 26.1445;
+  const lon = coords?.lon ?? 91.7362;
+
+  useEffect(() => {
+    setLoading(true);
+    const url =
+      `https://api.open-meteo.com/v1/forecast` +
+      `?latitude=${lat}&longitude=${lon}` +
+      `&current=temperature_2m,relative_humidity_2m,precipitation,weathercode,windspeed_10m,uv_index,apparent_temperature` +
+      `&hourly=precipitation_probability` +
+      `&forecast_days=1` +
+      `&timezone=Asia%2FKolkata`;
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        const c = data.current;
+        // rain chance = max of first 6 hours
+        const rainProb = Math.max(...(data.hourly?.precipitation_probability?.slice(0,6) ?? [0]));
+        setWx({
+          temp:      Math.round(c.temperature_2m),
+          feelsLike: Math.round(c.apparent_temperature),
+          humidity:  c.relative_humidity_2m,
+          rainfall:  c.precipitation,
+          rainChance: rainProb,
+          wind:      Math.round(c.windspeed_10m),
+          uv:        c.uv_index,
+          code:      c.weathercode,
+          label:     WMO_LABEL[c.weathercode] ?? 'Unknown',
+        });
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [lat, lon]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const uvColor = !wx ? '#888' : wx.uv <= 2 ? '#22c55e' : wx.uv <= 5 ? '#f59e0b' : wx.uv <= 7 ? '#f97316' : '#ef4444';
+  const rainColor = !wx ? '#888' : wx.rainChance < 30 ? '#22c55e' : wx.rainChance < 60 ? '#f59e0b' : '#3b82f6';
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      {/* Card face */}
+      <div className="card kpi-card" style={{ cursor: 'default', userSelect: 'none', minWidth: 160 }}>
+        <div className="kpi-icon info" style={{ background: 'linear-gradient(135deg,#1E6FA8,#2C8FD1)', color: '#fff' }}>
+          <Thermometer size={22} />
+        </div>
+        <div>
+          {loading ? (
+            <div style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--text-secondary)' }}>—°C</div>
+          ) : wx ? (
+            <>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--ink)' }}>{wx.temp}°C</div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: 1 }}>
+                {wx.label} · Feels {wx.feelsLike}°C
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Weather unavailable</div>
+          )}
+          <div style={{ fontSize: '0.72rem', color: 'var(--sky)', marginTop: 2, fontWeight: 600 }}>Hover for details ↗</div>
+        </div>
+      </div>
+
+      {/* Hover dropdown */}
+      {open && wx && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, zIndex: 2000,
+          marginTop: 6, minWidth: 240,
+          background: '#fff',
+          border: '1.5px solid #D6EAF9',
+          borderRadius: 12,
+          boxShadow: '0 8px 32px rgba(30,111,168,0.18)',
+          padding: '14px 16px',
+          animation: 'fadeInDown .15s ease',
+        }}>
+          {/* Header */}
+          <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#14263B', marginBottom: 10,
+            borderBottom: '1px solid #EAF4FC', paddingBottom: 8,
+            display: 'flex', alignItems: 'center', gap: 6 }}>
+            <CloudRain size={15} color="#2C8FD1" />
+            Weather — {coords ? 'Your location' : 'Guwahati (default)'}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 14px' }}>
+            {/* Rainfall chance */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <CloudRain size={14} color={rainColor} />
+              <div>
+                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>Rain Chance</div>
+                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: rainColor }}>{wx.rainChance}%</div>
+              </div>
+            </div>
+
+            {/* Humidity */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Droplets size={14} color="#2C8FD1" />
+              <div>
+                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>Humidity</div>
+                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#14263B' }}>{wx.humidity}%</div>
+              </div>
+            </div>
+
+            {/* Wind */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Wind size={14} color="#64748b" />
+              <div>
+                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>Wind Speed</div>
+                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#14263B' }}>{wx.wind} km/h</div>
+              </div>
+            </div>
+
+            {/* UV Index */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Eye size={14} color={uvColor} />
+              <div>
+                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>UV Index</div>
+                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: uvColor }}>{wx.uv}</div>
+              </div>
+            </div>
+
+            {/* Rainfall today */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Droplets size={14} color="#3b82f6" />
+              <div>
+                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>Rainfall Today</div>
+                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#14263B' }}>{wx.rainfall} mm</div>
+              </div>
+            </div>
+
+            {/* Feels like */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Thermometer size={14} color="#f97316" />
+              <div>
+                <div style={{ fontSize: '0.7rem', color: '#5C7288' }}>Feels Like</div>
+                <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#14263B' }}>{wx.feelsLike}°C</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Condition bar */}
+          <div style={{
+            marginTop: 10, padding: '7px 10px',
+            background: '#EAF4FC', borderRadius: 7,
+            fontSize: '0.78rem', color: '#1E6FA8', fontWeight: 600,
+            display: 'flex', alignItems: 'center', gap: 6,
+          }}>
+            <CloudRain size={12} />
+            {wx.label}
+            {wx.rainChance > 50 && <span style={{ marginLeft: 'auto', color: '#ef4444', fontWeight: 700 }}>⚠ Rain likely</span>}
+          </div>
+
+          <div style={{ fontSize: '0.65rem', color: '#94A6B8', marginTop: 6, textAlign: 'right' }}>
+            Source: Open-Meteo · updated now
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 // ---------------------------------------------------------------------------
@@ -295,6 +486,8 @@ export const Dashboard = () => {
             </KpiPopover>
           );
         })}
+        {/* Live weather widget */}
+        <WeatherWidget coords={coords} />
       </div>
 
       {/* Main Map Area */}
