@@ -6,10 +6,14 @@
   "scripts": {
     "install:all": "npm install && npm --prefix backend install && npm --prefix frontend/vite-project install",
     "dev": "concurrently -n \"backend,frontend\" -c \"blue,cyan\" \"npm --prefix backend run dev\" \"npm --prefix frontend/vite-project run dev\"",
-    "start": "concurrently -n \"backend,frontend\" -c \"blue,cyan\" \"npm --prefix backend start\" \"npm --prefix frontend/vite-project run dev\"",
+    "start": "npm --prefix backend start",
+    "build": "npm --prefix frontend/vite-project run build",
+    "build:full": "npm --prefix backend install --omit=dev && npm --prefix frontend/vite-project install && npm --prefix frontend/vite-project run build",
     "backend": "npm --prefix backend run dev",
     "frontend": "npm --prefix frontend/vite-project run dev",
     "seed:admin": "npm --prefix backend run seed:admin",
+    "seed:demo-users": "npm --prefix backend run seed:demo-users",
+    "seed:demo-vehicles": "npm --prefix backend run seed:demo-vehicles",
     "seed:demo-alerts": "npm --prefix backend run seed:demo-alerts"
   },
   "devDependencies": {

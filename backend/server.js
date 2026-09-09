@@ -60,13 +60,19 @@ const allowedOrigins = [
 app.use(
     cors({
         origin: function (origin, callback) {
+            // Allow requests with no origin (curl, Postman, server-to-server)
+            if (!origin) return callback(null, true);
+            // Localhost dev
+            if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
+            // Exact match against whitelist
+            if (allowedOrigins.includes(origin)) return callback(null, true);
+            // Production hosting platforms — Vercel, Render, Railway, Netlify
             if (
-                !origin ||
-                allowedOrigins.includes(origin) ||
-                /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
-            ) {
-                return callback(null, true);
-            }
+                /\.vercel\.app$/.test(origin) ||
+                /\.onrender\.com$/.test(origin) ||
+                /\.railway\.app$/.test(origin) ||
+                /\.netlify\.app$/.test(origin)
+            ) return callback(null, true);
             return callback(new Error("Not allowed by CORS"));
         },
         credentials: true
@@ -142,11 +148,16 @@ const PORT      = process.env.PORT      || 1710;
 const MONGO_URL = process.env.MONGO_URL || "mongodb://127.0.0.1:27017/ner_logistics";
 
 const connectAndStart = async () => {
+    const isAtlas = MONGO_URL.includes("mongodb+srv") || MONGO_URL.includes("mongodb.net");
+
     try {
-        await mongoose.connect(MONGO_URL, { serverSelectionTimeoutMS: 2000 });
-        console.log("Connected to MongoDB at", MONGO_URL);
+        await mongoose.connect(MONGO_URL, {
+            serverSelectionTimeoutMS: isAtlas ? 10000 : 5000,
+        });
+        console.log("Connected to MongoDB:", isAtlas ? "Atlas (cloud)" : MONGO_URL);
     } catch (err) {
-        if (MONGO_URL.includes("127.0.0.1") || MONGO_URL.includes("localhost")) {
+        // Only try embedded fallback for local URLs — never for Atlas
+        if (!isAtlas && (MONGO_URL.includes("127.0.0.1") || MONGO_URL.includes("localhost"))) {
             console.log("Local MongoDB not detected on port 27017. Starting embedded MongoDB with persistence...");
             try {
                 const fs   = require("fs");
@@ -165,7 +176,7 @@ const connectAndStart = async () => {
                 process.exit(1);
             }
         } else {
-            console.error("Error while connecting to MongoDB:", err);
+            console.error("Error connecting to MongoDB:", err.message);
             process.exit(1);
         }
     }

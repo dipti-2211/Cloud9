@@ -7,7 +7,9 @@
 import { vehicles as mockVehicles, incidents as mockIncidents, roads as mockRoads, deliveries as mockDeliveries, dashboardKPIs } from '../data/mockData';
 
 // ─── Config ────────────────────────────────────────────────────────────────
-export const BASE_URL = 'http://localhost:1710';
+// In production set VITE_API_URL=https://your-backend.onrender.com in Vercel/Netlify dashboard
+// In local dev this falls back to localhost:1710 automatically — no config needed
+export const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:1710';
 
 // ─── Token helpers ─────────────────────────────────────────────────────────
 export const auth = {
