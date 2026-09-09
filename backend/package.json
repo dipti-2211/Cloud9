@@ -9,7 +9,8 @@
         "dev": "nodemon server.js",
         "seed:admin": "node scripts/seedAdmin.js",
         "seed:demo-alerts": "node scripts/seedDemoAlerts.js",
-        "seed:demo-users": "node scripts/seedDemoUsers.js"
+        "seed:demo-users": "node scripts/seedDemoUsers.js",
+        "seed:demo-vehicles": "node scripts/seedDemoVehicles.js"
     },
     "dependencies": {
         "bcryptjs": "^3.0.2",

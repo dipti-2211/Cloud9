@@ -83,7 +83,14 @@ const roadSchema =
             default: "OPEN"
         },
 
+        district: {
+
+            type: String
+
+        },
+
         geometry: {
+
 
             type: {
 

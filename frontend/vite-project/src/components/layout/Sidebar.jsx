@@ -6,7 +6,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Truck, Route, AlertTriangle, Package,
-  Bell, Settings, Navigation, UserPlus, Car, KeyRound, ShieldCheck,
+  Bell, Settings, Navigation, UserPlus, Car, KeyRound, ShieldCheck, MapPin,
 } from 'lucide-react';
 import { auth } from '../../services/api';
 
@@ -30,6 +30,7 @@ export const Sidebar = () => {
 
   const mainItems = [
     { path:'/dashboard',     label:'Dashboard',     icon:LayoutDashboard },
+    { path:'/districts',     label:'Districts',     icon:MapPin },
     { path:'/vehicles',      label:'Vehicles',      icon:Truck },
     { path:'/roads',         label:'Roads',         icon:Route },
     { path:'/incidents',     label:'Incidents',     icon:AlertTriangle },

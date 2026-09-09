@@ -5,7 +5,7 @@ import 'leaflet/dist/leaflet.css';
 import toast from 'react-hot-toast';
 import { vehicles as initialVehicles, incidents } from '../../data/mockData';
 import { Badge } from '../common/Badge';
-import { getLandslideRisk } from '../../services/api';
+import { getLandslideRisk, vehiclesAPI } from '../../services/api';
 import demoLocations from '../../data/demoLocations.json';
 
 // ---------------------------------------------------------------------------
@@ -14,10 +14,8 @@ import demoLocations from '../../data/demoLocations.json';
 const vehicleIcon  = L.divIcon({ className: 'vehicle-marker',  iconSize: [14, 14], iconAnchor: [7, 7] });
 const incidentIcon = L.divIcon({ className: 'incident-marker', iconSize: [16, 16], iconAnchor: [8, 8] });
 
-// "You are here" — distinct blue pulsing dot
 const userLocationIcon = L.divIcon({ className: 'user-location-marker', iconSize: [20, 20], iconAnchor: [10, 10] });
 
-// Demo location pin — larger, always-visible
 const demoPinHigh = L.divIcon({ className: 'demo-pin demo-pin-high', iconSize: [22, 22], iconAnchor: [11, 22] });
 const demoPinLow  = L.divIcon({ className: 'demo-pin demo-pin-low',  iconSize: [22, 22], iconAnchor: [11, 22] });
 
@@ -37,7 +35,6 @@ const getRiskIcon = (category, isLoading = false) => {
   return L.divIcon({ className: `risk-marker ${cls}`, iconSize: [18, 18], iconAnchor: [9, 9] });
 };
 
-// Map risk category to the app's CSS colour tokens
 const CATEGORY_COLOUR = {
   'Very Low': 'var(--success)',
   'Low':      'var(--success)',
@@ -56,9 +53,6 @@ const ClickHandler = ({ onMapClick }) => {
   return null;
 };
 
-// Recenters the map when the user's coordinates become available.
-// IMPORTANT: depend on lat/lon *values* not the coords object reference —
-// a new object with the same lat/lon won't re-trigger the effect.
 const RecenterOnUser = ({ coords }) => {
   const map = useMap();
   const lat = coords?.lat;
@@ -67,31 +61,61 @@ const RecenterOnUser = ({ coords }) => {
     if (lat != null && lon != null) {
       map.flyTo([lat, lon], 14, { animate: true, duration: 1.2 });
     }
-  }, [lat, lon, map]);   // primitive deps — fires whenever position actually changes
+  }, [lat, lon, map]);
   return null;
 };
+
+// ---------------------------------------------------------------------------
+// Derive a [lat, lon] Leaflet position from a vehicle record.
+//
+// Coordinate-order contract (must match server.js tick):
+//   DB: currentLocation.coordinates = [lon, lat]  (GeoJSON)
+//   Leaflet: needs [lat, lon]                      (reverse of GeoJSON)
+//   mockData: position = [lat, lon]                (already Leaflet order)
+// ---------------------------------------------------------------------------
+function vehicleLeafletPos(v) {
+  // Backend vehicle: has currentLocation.coordinates = [lon, lat]
+  if (v.currentLocation?.coordinates?.length === 2) {
+    const [lon, lat] = v.currentLocation.coordinates;
+    // Sanity: lat should be 22-28 for NER, lon 89-97
+    if (lat >= 20 && lat <= 30 && lon >= 88 && lon <= 98) {
+      return [lat, lon];
+    }
+  }
+  // Mock vehicle (fallback): position = [lat, lon]
+  if (v.position?.length === 2) return v.position;
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
+  // Start from mock data; replace with live backend data when available
   const [liveVehicles, setLiveVehicles] = useState(initialVehicles);
 
-  // Risk prediction state
-  const [riskMarkers, setRiskMarkers]   = useState([]);   // resolved predictions
-  const [pendingMarker, setPendingMarker] = useState(null); // loading spinner position
+  const [riskMarkers,   setRiskMarkers]   = useState([]);
+  const [pendingMarker, setPendingMarker] = useState(null);
 
-  // Simulate live vehicle movement (unchanged)
+  // Poll backend for live vehicle positions every 5 s.
+  // Falls back to mock data (already in state) if the call fails.
   useEffect(() => {
-    const interval = setInterval(() => {
-      setLiveVehicles(prev => prev.map(v => {
-        if (v.id === "TRUCK-001") {
-          return { ...v, position: [v.position[0] + 0.005, v.position[1] - 0.001] };
+    let cancelled = false;
+
+    const fetchVehicles = async () => {
+      try {
+        const data = await vehiclesAPI.getAll();
+        if (!cancelled && Array.isArray(data) && data.length > 0) {
+          setLiveVehicles(data);
         }
-        return v;
-      }));
-    }, 2000);
-    return () => clearInterval(interval);
+      } catch {
+        // Keep current state (mock or last successful fetch)
+      }
+    };
+
+    fetchVehicles();
+    const id = setInterval(fetchVehicles, 5000);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   // Handle a map click — fetch landslide risk at that point
@@ -121,23 +145,25 @@ export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
         attribution="&copy; Stadia Maps &copy; OpenStreetMap contributors"
       />
 
-      {/* Fly to user's location when coords arrive */}
       <RecenterOnUser coords={userCoords} />
-
-      {/* Click-to-predict handler */}
       <ClickHandler onMapClick={handleMapClick} />
 
-      {/* Vehicle routes */}
-      {liveVehicles.filter(v => v.route).map(v => (
-        <Polyline
-          key={`route-${v.id}`}
-          positions={v.route}
-          color="var(--accent)"
-          weight={3}
-          opacity={0.6}
-          dashArray="5, 10"
-        />
-      ))}
+      {/* Vehicle route polylines */}
+      {liveVehicles.filter(v => v.route || v.routeWaypoints).map(v => {
+        // routeWaypoints from DB = [[lat,lon],...] — already Leaflet order
+        const pts = v.routeWaypoints?.length > 1 ? v.routeWaypoints : v.route;
+        if (!pts || pts.length < 2) return null;
+        return (
+          <Polyline
+            key={`route-${v.id || v._id}`}
+            positions={pts}
+            color="var(--accent)"
+            weight={3}
+            opacity={0.6}
+            dashArray="5, 10"
+          />
+        );
+      })}
 
       {/* Active route from RoutePanel — orange, solid, thicker */}
       {activeRoute && activeRoute.length > 1 && (
@@ -149,18 +175,32 @@ export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
         />
       )}
 
-      {/* Live Vehicles */}
-      {liveVehicles.map((v) => (
-        <Marker key={v.id} position={v.position} icon={vehicleIcon}>
-          <Popup>
-            <div style={{ padding: '4px' }}>
-              <div style={{ fontWeight: 600, fontSize: '1rem' }}>{v.id}</div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>{v.cargo}</div>
-              <Badge type={v.status === 'IN TRANSIT' ? 'success' : 'warning'}>{v.status}</Badge>
-            </div>
-          </Popup>
-        </Marker>
-      ))}
+      {/* Live Vehicles — marker at interpolated position */}
+      {liveVehicles.map((v) => {
+        const pos = vehicleLeafletPos(v);
+        if (!pos) return null;
+        return (
+          <Marker key={v.id || v._id} position={pos} icon={vehicleIcon}>
+            <Popup>
+              <div style={{ padding: '4px' }}>
+                <div style={{ fontWeight: 600, fontSize: '1rem' }}>{v.id || v.vehicleNumber}</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                  {v.cargo || v.cargoType}
+                </div>
+                <Badge type={v.status === 'IN TRANSIT' || v.status === 'IN_TRANSIT' ? 'success' : 'warning'}>
+                  {v.status}
+                </Badge>
+                <div style={{
+                  marginTop: '8px', fontSize: '0.7rem', color: 'var(--text-secondary)',
+                  fontStyle: 'italic', lineHeight: 1.4,
+                }}>
+                  📍 Simulated GPS — live hardware integration ready for real fleet hardware
+                </div>
+              </div>
+            </Popup>
+          </Marker>
+        );
+      })}
 
       {/* Incidents */}
       {incidents.map((inc) => (
@@ -248,7 +288,6 @@ export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
             <Popup minWidth={210}>
               <div style={{ padding: '8px' }}>
 
-                {/* Risk category header */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                   <span style={{ fontWeight: 700, fontSize: '1rem', color: colour }}>
                     {marker.risk_category}
@@ -258,7 +297,6 @@ export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
                   </span>
                 </div>
 
-                {/* Risk percentage bar */}
                 <div style={{ marginBottom: '12px' }}>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>
                     Risk Score
@@ -277,7 +315,6 @@ export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
                   </div>
                 </div>
 
-                {/* Feature grid */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.8rem' }}>
                   <div>
                     <div style={{ color: 'var(--text-secondary)' }}>Elevation</div>
@@ -303,7 +340,17 @@ export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
                   </div>
                 </div>
 
-                {/* Remove button */}
+                {/* Rainfall source provenance badge */}
+                {marker.rainfall_source && (
+                  <div style={{
+                    marginTop: '8px', fontSize: '0.68rem', color: 'var(--text-secondary)',
+                    background: 'var(--surface-elevated)', borderRadius: 4, padding: '3px 7px',
+                    display: 'inline-block',
+                  }}>
+                    🌧 {marker.rainfall_source === 'live' ? 'Live rainfall (Open-Meteo)' : 'Historical average'}
+                  </div>
+                )}
+
                 <button
                   onClick={(e) => {
                     e.stopPropagation();

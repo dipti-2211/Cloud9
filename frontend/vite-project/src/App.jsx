@@ -14,7 +14,9 @@ import { RegisterFieldOfficer } from './pages/RegisterFieldOfficer';
 import { RegisterVehicleOperator } from './pages/RegisterVehicleOperator';
 import { AccountDetails } from './pages/AccountDetails';
 import { AdminApprovals } from './pages/AdminApprovals';
+import { Districts } from './pages/Districts';
 import { auth } from './services/api';
+import { LanguageProvider } from './i18n/LanguageContext';
 
 // Protected route — redirects to /login if no JWT token found
 const ProtectedRoute = ({ children }) => {
@@ -28,7 +30,7 @@ const PublicRoute = ({ children }) => {
 
 function App() {
   return (
-    <>
+    <LanguageProvider>
       <Toaster
         position="top-right"
         toastOptions={{
@@ -53,6 +55,7 @@ function App() {
             <Route path="deliveries"         element={<Deliveries />} />
             <Route path="alerts"             element={<Alerts />} />
             <Route path="route-planner"      element={<RoutePlanner />} />
+            <Route path="districts"          element={<Districts />} />
             <Route path="settings"           element={<Settings />} />
             {/* Personnel */}
             <Route path="register-officer"   element={<RegisterFieldOfficer />} />
@@ -66,7 +69,7 @@ function App() {
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>
-    </>
+    </LanguageProvider>
   );
 }
 

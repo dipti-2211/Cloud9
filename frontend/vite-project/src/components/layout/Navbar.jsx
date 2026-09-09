@@ -2,6 +2,7 @@ import { Bell, User, Activity, LogOut, AlertTriangle, BellRing, X, MapPin, Route
 import { Link, useNavigate } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { api, auth, authAPI } from '../../services/api';
+import { useLang } from '../../i18n/LanguageContext';
 
 // ── Notification dropdown ─────────────────────────────────────────────────
 const NotificationPanel = ({ onClose }) => {
@@ -118,6 +119,7 @@ export const Navbar = () => {
   const [userMenuOpen,setUserMenuOpen]= useState(false);
   const bellRef = useRef(null);
   const userRef = useRef(null);
+  const { lang, setLang } = useLang();
 
   const user = auth.getUser();
   const isAdmin = user?.role === 'ADMIN';
@@ -158,6 +160,23 @@ export const Navbar = () => {
         <div style={{ display:'flex', alignItems:'center', gap:'6px', color:'var(--success)', fontSize:'0.78rem', fontWeight:700 }}>
           <Activity size={13} />
           <span className="hide-sm">SYSTEM OPERATIONAL</span>
+        </div>
+
+        {/* EN / HI language toggle */}
+        <div style={{ display:'flex', alignItems:'center', gap:'2px', background:'var(--sky-tint)', border:'1px solid var(--sky-tint-2)', borderRadius:7, padding:'2px 3px' }}>
+          {['en', 'hi'].map(l => (
+            <button
+              key={l}
+              onClick={() => setLang(l)}
+              style={{
+                padding:'3px 9px', borderRadius:5, border:'none', cursor:'pointer',
+                fontSize:'0.72rem', fontWeight:700, letterSpacing:'0.04em', textTransform:'uppercase',
+                background: lang === l ? 'var(--sky-dark)' : 'transparent',
+                color:      lang === l ? '#fff' : 'var(--slate)',
+                transition: 'background .15s, color .15s',
+              }}
+            >{l === 'en' ? 'EN' : 'हि'}</button>
+          ))}
         </div>
 
         {/* Bell notification */}

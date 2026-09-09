@@ -1,3 +1,14 @@
+/**
+ * Incidents.jsx
+ *
+ * Changes from base:
+ *  - Fix 4: Auto geo-tag — on modal open, calls useUserLocation to get GPS coords,
+ *            then reverse-geocodes via /api/geocode/reverse for a human-readable label.
+ *  - Fix 5: i18n — toast messages use t() from LanguageContext.
+ *  - Fix 6: Offline queuing — if navigator.onLine is false OR fetch throws a network
+ *            error, the report is saved to localStorage['sih_offline_incidents'] and
+ *            synced automatically when the browser goes online.
+ */
 import { incidents } from '../data/mockData';
 import { Badge } from '../components/common/Badge';
 import { PageHeader } from '../components/common/PageHeader';
@@ -6,8 +17,16 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList
 } from 'recharts';
 import toast from 'react-hot-toast';
-import { useState, useMemo, useRef } from 'react';
-import { Camera, X } from 'lucide-react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { Camera, X, MapPin, Loader } from 'lucide-react';
+import { useUserLocation } from '../hooks/useUserLocation';
+import { reverseGeocode, incidentsAPI } from '../services/api';
+import { useLang } from '../i18n/LanguageContext';
+
+// Offline queue helpers
+const QUEUE_KEY = 'sih_offline_incidents';
+const getQueue  = () => { try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch { return []; } };
+const saveQueue = (q) => localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
 
 // Fleet-ops disclaimer
 const DataSourceNote = () => (
@@ -23,30 +42,160 @@ const DataSourceNote = () => (
   </div>
 );
 
-// Colour per root-cause bucket
 const CAUSE_COLORS = {
-  'Landslide':            '#ef4444',   // risk-red — landslide-related
-  'Heavy Rainfall':       '#f97316',   // orange — weather
-  'Bridge / Road Damage': '#f59e0b',   // amber — infrastructure
-  'Mechanical Breakdown': '#3b82f6',   // blue — vehicle
-  'Overspeeding':         '#6366f1',   // indigo — human
+  'Landslide':            '#ef4444',
+  'Heavy Rainfall':       '#f97316',
+  'Bridge / Road Damage': '#f59e0b',
+  'Mechanical Breakdown': '#3b82f6',
+  'Overspeeding':         '#6366f1',
 };
-
 const DEFAULT_COLOR = '#64748b';
 
 export const Incidents = () => {
+  const { t } = useLang();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState(null);
-  const [deaths,   setDeaths]   = useState('');
-  const [injuries, setInjuries] = useState('');
+  const [photoBase64,  setPhotoBase64]  = useState(null);
+  const [deaths,       setDeaths]       = useState('');
+  const [injuries,     setInjuries]     = useState('');
+  const [incidentType, setIncidentType] = useState('Landslide');
+  const [description,  setDescription]  = useState('');
+  const [submitting,   setSubmitting]   = useState(false);
+
+  // Location state for geo-tagging
+  const [gpsCoords,     setGpsCoords]     = useState(null);   // { lat, lon }
+  const [locationLabel, setLocationLabel] = useState('');
+  const [locStatus,     setLocStatus]     = useState('idle'); // idle | fetching | ready | error
   const fileRef = useRef(null);
 
+  // Geo-location hook (already used elsewhere — no new permissions needed if granted)
+  const { coords, requestLocation } = useUserLocation();
+
+  // When modal opens, request GPS and reverse-geocode
+  useEffect(() => {
+    if (!isModalOpen) return;
+
+    setLocStatus('fetching');
+    requestLocation();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isModalOpen]);
+
+  // When coords arrive (from hook), reverse-geocode for a human-readable label
+  useEffect(() => {
+    if (!isModalOpen || !coords) return;
+
+    setGpsCoords({ lat: coords.lat, lon: coords.lon });
+    setLocStatus('fetching');
+
+    reverseGeocode(coords.lat, coords.lon)
+      .then(result => {
+        setLocationLabel(result.short_name || result.display_name || `${coords.lat.toFixed(5)}, ${coords.lon.toFixed(5)}`);
+        setLocStatus('ready');
+      })
+      .catch(() => {
+        setLocationLabel(`${coords.lat.toFixed(5)}, ${coords.lon.toFixed(5)}`);
+        setLocStatus('ready');
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coords, isModalOpen]);
+
+  // ── Offline sync ─────────────────────────────────────────────────────────
+  const syncOfflineQueue = useCallback(async () => {
+    const queue = getQueue();
+    if (queue.length === 0) return;
+
+    let synced = 0;
+    const remaining = [];
+    for (const item of queue) {
+      try {
+        await incidentsAPI.create(item);
+        synced++;
+      } catch {
+        remaining.push(item);
+      }
+    }
+    saveQueue(remaining);
+    if (synced > 0) toast.success(`${synced} ${t('synced_queued')}`);
+  }, [t]);
+
+  useEffect(() => {
+    window.addEventListener('online', syncOfflineQueue);
+    return () => window.removeEventListener('online', syncOfflineQueue);
+  }, [syncOfflineQueue]);
+
+  // ── Photo handling ────────────────────────────────────────────────────────
   const handlePhoto = (e) => {
     const file = e.target.files?.[0];
-    if (file) setPhotoPreview(URL.createObjectURL(file));
+    if (!file) return;
+    setPhotoPreview(URL.createObjectURL(file));
+
+    // Convert to base64 for offline storage
+    const reader = new FileReader();
+    reader.onload = (ev) => setPhotoBase64(ev.target.result);
+    reader.readAsDataURL(file);
   };
 
-  // ── Cause breakdown chart data ──────────────────────────────────────────
+  // ── Submit ────────────────────────────────────────────────────────────────
+  const handleSubmit = async () => {
+    setSubmitting(true);
+
+    const payload = {
+      type:        incidentType.toUpperCase().replace(/ /g, '_').replace('/', '_'),
+      severity:    'MEDIUM',
+      description: description || `${incidentType} reported via field officer app`,
+      location: {
+        type: 'Point',
+        coordinates: gpsCoords ? [gpsCoords.lon, gpsCoords.lat] : [93.0, 25.3],
+      },
+      locationLabel: locationLabel || 'Unknown',
+      reportedBy:    'field_officer',
+      photoUrl:      photoBase64 || null,
+      deaths:        parseInt(deaths)   || 0,
+      injuries:      parseInt(injuries) || 0,
+    };
+
+    // Try live submit; fall back to offline queue if network is down or fails
+    if (!navigator.onLine) {
+      const queue = getQueue();
+      saveQueue([...queue, payload]);
+      toast(t('saved_offline'), { icon: '📴' });
+      _resetForm();
+      return;
+    }
+
+    try {
+      await incidentsAPI.create(payload);
+      toast.success(t('incident_reported'));
+      _resetForm();
+    } catch (err) {
+      // Network error — queue offline
+      if (err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError')) {
+        const queue = getQueue();
+        saveQueue([...queue, payload]);
+        toast(t('saved_offline'), { icon: '📴' });
+        _resetForm();
+      } else {
+        toast.error(`Submit failed: ${err.message}`);
+        setSubmitting(false);
+      }
+    }
+  };
+
+  const _resetForm = () => {
+    setIsModalOpen(false);
+    setPhotoPreview(null);
+    setPhotoBase64(null);
+    setDeaths('');
+    setInjuries('');
+    setDescription('');
+    setIncidentType('Landslide');
+    setGpsCoords(null);
+    setLocationLabel('');
+    setLocStatus('idle');
+    setSubmitting(false);
+  };
+
+  // ── Chart data ────────────────────────────────────────────────────────────
   const causeData = useMemo(() => {
     const counts = {};
     incidents.forEach(inc => {
@@ -55,29 +204,24 @@ export const Incidents = () => {
     });
     return Object.entries(counts)
       .map(([cause, count]) => ({ cause, count }))
-      .sort((a, b) => b.count - a.count);   // descending
+      .sort((a, b) => b.count - a.count);
   }, []);
 
-  const total = incidents.length;
-  const landslideCount = causeData.find(d => d.cause === 'Landslide')?.count ?? 0;
+  const total            = incidents.length;
+  const landslideCount   = causeData.find(d => d.cause === 'Landslide')?.count ?? 0;
   const landslidePercent = total > 0 ? Math.round((landslideCount / total) * 100) : 0;
 
-  // ── Sort incidents by severity for the table (CRITICAL first) ──────────
-  const severityOrder = { CRITICAL: 0, WARNING: 1, INFO: 2 };
+  const severityOrder   = { CRITICAL: 0, WARNING: 1, INFO: 2 };
   const sortedIncidents = [...incidents].sort(
     (a, b) => (severityOrder[a.severity] ?? 9) - (severityOrder[b.severity] ?? 9)
   );
 
-  const handleSubmit = () => {
-    setIsModalOpen(false);
-    setPhotoPreview(null); setDeaths(''); setInjuries('');
-    toast.success('Incident reported successfully. Awaiting verification.');
-  };
-
   const modalFooter = (
     <>
-      <button className="btn btn-secondary" onClick={() => setIsModalOpen(false)}>Cancel</button>
-      <button className="btn btn-primary" onClick={handleSubmit}>Submit Report</button>
+      <button className="btn btn-secondary" onClick={_resetForm} disabled={submitting}>Cancel</button>
+      <button className="btn btn-primary" onClick={handleSubmit} disabled={submitting}>
+        {submitting ? 'Submitting…' : 'Submit Report'}
+      </button>
     </>
   );
 
@@ -90,7 +234,7 @@ export const Incidents = () => {
       />
       <DataSourceNote />
 
-      {/* ── Cause Breakdown Chart ── */}
+      {/* Cause Breakdown Chart */}
       <div className="card" style={{ marginBottom: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
           <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0 }}>Incidents by Root Cause</h3>
@@ -107,49 +251,21 @@ export const Incidents = () => {
         </div>
 
         <ResponsiveContainer width="100%" height={causeData.length * 44 + 20}>
-          <BarChart
-            layout="vertical"
-            data={causeData}
-            margin={{ top: 0, right: 60, left: 0, bottom: 0 }}
-            barSize={20}
-          >
-            <XAxis
-              type="number"
-              stroke="var(--border)"
-              tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
-              allowDecimals={false}
-            />
-            <YAxis
-              type="category"
-              dataKey="cause"
-              width={160}
-              stroke="none"
-              tick={{ fill: 'var(--text-primary)', fontSize: 12, fontWeight: 500 }}
-            />
+          <BarChart layout="vertical" data={causeData} margin={{ top: 0, right: 60, left: 0, bottom: 0 }} barSize={20}>
+            <XAxis type="number" stroke="var(--border)" tick={{ fill: 'var(--text-secondary)', fontSize: 11 }} allowDecimals={false} />
+            <YAxis type="category" dataKey="cause" width={160} stroke="none" tick={{ fill: 'var(--text-primary)', fontSize: 12, fontWeight: 500 }} />
             <Tooltip
               cursor={{ fill: 'rgba(255,255,255,0.04)' }}
-              contentStyle={{
-                backgroundColor: 'var(--surface-elevated)',
-                border: '1px solid var(--border)',
-                borderRadius: '6px',
-                fontSize: '0.82rem',
-              }}
-              formatter={(value, name) => [`${value} incident${value !== 1 ? 's' : ''}`, 'Count']}
+              contentStyle={{ backgroundColor: 'var(--surface-elevated)', border: '1px solid var(--border)', borderRadius: '6px', fontSize: '0.82rem' }}
+              formatter={(value) => [`${value} incident${value !== 1 ? 's' : ''}`, 'Count']}
             />
             <Bar dataKey="count" radius={[0, 4, 4, 0]}>
-              {causeData.map(entry => (
-                <Cell key={entry.cause} fill={CAUSE_COLORS[entry.cause] ?? DEFAULT_COLOR} />
-              ))}
-              <LabelList
-                dataKey="count"
-                position="right"
-                style={{ fill: 'var(--text-secondary)', fontSize: 12, fontWeight: 600 }}
-              />
+              {causeData.map(entry => <Cell key={entry.cause} fill={CAUSE_COLORS[entry.cause] ?? DEFAULT_COLOR} />)}
+              <LabelList dataKey="count" position="right" style={{ fill: 'var(--text-secondary)', fontSize: 12, fontWeight: 600 }} />
             </Bar>
           </BarChart>
         </ResponsiveContainer>
 
-        {/* Legend */}
         <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--border)' }}>
           {causeData.map(({ cause }) => (
             <div key={cause} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
@@ -160,7 +276,7 @@ export const Incidents = () => {
         </div>
       </div>
 
-      {/* ── Incidents Table ── */}
+      {/* Incidents Table */}
       <div className="card">
         <div className="table-container">
           <table>
@@ -194,7 +310,7 @@ export const Incidents = () => {
                   <td>{inc.location}</td>
                   <td><Badge>{inc.severity}</Badge></td>
                   <td>{inc.time}</td>
-                  <td><Badge>{inc.status}</Badge></td>
+                  <td><Badge>{t(inc.status) || inc.status}</Badge></td>
                 </tr>
               ))}
             </tbody>
@@ -203,10 +319,12 @@ export const Incidents = () => {
       </div>
 
       {/* Report Modal */}
-      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Report New Incident" footer={modalFooter}>
+      <Modal isOpen={isModalOpen} onClose={_resetForm} title="Report New Incident" footer={modalFooter}>
+
+        {/* Incident Type */}
         <div className="form-group">
           <label className="form-label">Incident Type</label>
-          <select className="form-control">
+          <select className="form-control" value={incidentType} onChange={e => setIncidentType(e.target.value)}>
             <option>Landslide</option>
             <option>Heavy Rainfall</option>
             <option>Bridge / Road Damage</option>
@@ -215,9 +333,59 @@ export const Incidents = () => {
             <option>Other</option>
           </select>
         </div>
+
+        {/* Auto geo-tagged location */}
         <div className="form-group">
-          <label className="form-label">Location</label>
-          <input type="text" className="form-control" placeholder="e.g., NH-10 Sector B" />
+          <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <MapPin size={13} />
+            Location (auto geo-tagged)
+          </label>
+
+          {locStatus === 'fetching' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: 'var(--text-secondary)', fontSize: '0.82rem', padding: '8px 0' }}>
+              <Loader size={13} style={{ animation: 'spin 1s linear infinite' }} />
+              {t('location_fetching')}
+            </div>
+          )}
+
+          {locStatus === 'ready' && gpsCoords && (
+            <div style={{ background: 'var(--sky-tint)', border: '1px solid var(--sky-tint-2)', borderRadius: 8, padding: '8px 12px' }}>
+              <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--ink)', marginBottom: 2 }}>
+                📍 {locationLabel}
+              </div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--slate)', fontFamily: 'monospace' }}>
+                {gpsCoords.lat.toFixed(6)}, {gpsCoords.lon.toFixed(6)}
+              </div>
+              <div style={{ fontSize: '0.68rem', color: 'var(--slate-soft)', marginTop: 3, fontStyle: 'italic' }}>
+                GPS coordinates will be saved with this report
+              </div>
+            </div>
+          )}
+
+          {locStatus === 'idle' && (
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', padding: '6px 0' }}>
+              Waiting for GPS…
+            </div>
+          )}
+
+          {locStatus === 'error' && (
+            <div style={{ fontSize: '0.8rem', color: 'var(--danger)', padding: '6px 0' }}>
+              {t('location_denied')} Coordinates will default to region centre.
+            </div>
+          )}
+        </div>
+
+        {/* Description */}
+        <div className="form-group">
+          <label className="form-label">Description</label>
+          <textarea
+            className="form-control"
+            rows={2}
+            placeholder="Brief description of the incident…"
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            style={{ resize: 'vertical' }}
+          />
         </div>
 
         {/* Casualties */}
@@ -243,7 +411,7 @@ export const Incidents = () => {
             <div style={{ position: 'relative', display: 'inline-block', marginBottom: 6 }}>
               <img src={photoPreview} alt="Preview"
                 style={{ width: 160, height: 110, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--line)' }} />
-              <button onClick={() => setPhotoPreview(null)}
+              <button onClick={() => { setPhotoPreview(null); setPhotoBase64(null); }}
                 style={{ position: 'absolute', top: -6, right: -6, background: 'var(--danger)', color: '#fff',
                   border: 'none', borderRadius: '50%', width: 20, height: 20, cursor: 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -260,6 +428,17 @@ export const Incidents = () => {
           )}
           <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handlePhoto} />
         </div>
+
+        {/* Offline indicator */}
+        {!navigator.onLine && (
+          <div style={{
+            padding: '8px 12px', borderRadius: 8, fontSize: '0.78rem', fontWeight: 600,
+            background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)',
+            color: '#b45309', display: 'flex', alignItems: 'center', gap: 7,
+          }}>
+            📴 You are offline — this report will be saved locally and synced when you reconnect.
+          </div>
+        )}
       </Modal>
     </div>
   );

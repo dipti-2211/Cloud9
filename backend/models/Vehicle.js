@@ -108,6 +108,29 @@ const vehicleSchema =
 
             required: true
 
+        },
+
+        // Waypoints stored as [lat, lon] pairs (business-logic order).
+        // When saving to currentLocation.coordinates we swap to [lon, lat] (GeoJSON order).
+        routeWaypoints: {
+
+            type: [[Number]],
+
+            default: []
+
+        },
+
+        // Progress along routeWaypoints: 0.0 = start, 1.0 = destination.
+        routeProgress: {
+
+            type: Number,
+
+            min: 0,
+
+            max: 1,
+
+            default: 0
+
         }
 
     }, {
