@@ -16,6 +16,7 @@ import { AccountDetails } from './pages/AccountDetails';
 import { AdminApprovals } from './pages/AdminApprovals';
 import { Districts } from './pages/Districts';
 import { CriticalRoads } from './pages/CriticalRoads';
+import { Personnel } from './pages/Personnel';
 import { auth } from './services/api';
 import { LanguageProvider } from './i18n/LanguageContext';
 
@@ -73,6 +74,8 @@ function App() {
             <Route path="admin/approvals"    element={<AdminApprovals />} />
             {/* Phase 4: Critical roads analysis */}
             <Route path="critical-roads"     element={<CriticalRoads />} />
+            {/* Phase 6: Personnel management (admin only) */}
+            <Route path="personnel"           element={<AdminRoute><Personnel /></AdminRoute>} />
           </Route>
 
           {/* Catch-all */}

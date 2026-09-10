@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardKPIs, vehicles, roads, incidents } from '../data/mockData';
-import { api } from '../services/api';
+import { api, alertsAPI } from '../services/api';
 import { Badge } from '../components/common/Badge';
 import { MapPanel } from '../components/map/MapPanel';
 import { useUserLocation } from '../hooks/useUserLocation';
@@ -340,12 +340,12 @@ export const Dashboard = () => {
   // Trigger location request on mount
   useEffect(() => { requestLocation(); }, []);
 
-  // Fix #5 — Load live alerts (30s polling) to drive the side panel + KPI count
+  // Load live alerts (60s polling) — all roles see alerts, auth header sent via alertsAPI
   useEffect(() => {
-    api.getAlerts().then(setLiveAlerts).catch(() => {});
+    alertsAPI.getAll().then(setLiveAlerts).catch(() => {});
     const id = setInterval(() => {
-      api.getAlerts().then(setLiveAlerts).catch(() => {});
-    }, 30000);
+      alertsAPI.getAll().then(setLiveAlerts).catch(() => {});
+    }, 60000);
     return () => clearInterval(id);
   }, []);
 
@@ -360,9 +360,9 @@ export const Dashboard = () => {
   const sideAlerts = liveAlerts.length > 0
     ? liveAlerts.slice(0, 4).map(a => ({
         id: a._id,
-        level: a.riskCategory === 'Very High' ? 'CRITICAL' : 'WARNING',
+        level: (a.severity === 'CRITICAL' || a.severity === 'HIGH') ? 'CRITICAL' : 'WARNING',
         message: a.message,
-        time: new Date(a.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        time: a.timestamp ? new Date(a.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
       }))
     : [];
 

@@ -60,11 +60,26 @@ export const authAPI = {
   register: (payload) => request('/api/auth/register', { method: 'POST', body: JSON.stringify(payload) }),
   getMe:    () => request('/api/auth/me'),
 
-  // Admin: GET /api/auth/users  →  { users:[...] }
+  // Admin: GET /api/auth/users?role=&status=  →  { users:[...] }
   getPending: async () => {
     const data = await request('/api/auth/users');
     return { data: data.users ?? data.data ?? [] };
   },
+
+  // Admin: get users with optional role/status filters
+  getUsers: async (role, status) => {
+    let qs = '';
+    if (role)   qs += `role=${role}&`;
+    if (status) qs += `status=${status}&`;
+    const data = await request(`/api/auth/users${qs ? '?' + qs.slice(0, -1) : ''}`);
+    return data.users ?? [];
+  },
+
+  // Admin: edit user fields
+  updateUser: (id, payload) => request(`/api/auth/users/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+
+  // Admin: enable/disable account
+  setUserStatus: (id, status) => request(`/api/auth/users/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
 
   // Admin: PATCH /api/auth/users/:id/approve|reject
   approve: (id) => request(`/api/auth/users/${id}/approve`, { method: 'PATCH' }),
@@ -123,7 +138,8 @@ export const deliveriesAPI = {
 // Returns plain array so Alerts.jsx can call .filter() directly
 export const alertsAPI = {
   getAll:      async () => { const d = await request('/api/alerts'); return d.alerts ?? []; },
-  acknowledge: (id)     => request(`/api/alerts/${id}/acknowledge`, { method: 'PATCH' }),
+  create:      (payload) => request('/api/alerts', { method: 'POST', body: JSON.stringify(payload) }),
+  acknowledge: (id)      => request(`/api/alerts/${id}/acknowledge`, { method: 'PATCH' }),
 };
 
 // ─── Settings ────────────────────────────────────────────────────────────────

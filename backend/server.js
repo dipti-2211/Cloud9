@@ -301,12 +301,19 @@ app.post("/api/auth/register-operator", async (req, res) => {
 });
 
 
-// GET /api/auth/users (Admin — list all users)
+// GET /api/auth/users (Admin — list all users, supports ?role= and ?status= filters)
 app.get("/api/auth/users", (req, res) => {
     const decoded = verifyToken(req);
     if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
-    const safe = USERS.map(({ passwordHash, ...u }) => u);
-    return res.json({ success: true, users: safe, total: safe.length });
+    let list = USERS.map(({ passwordHash, ...u }) => u);
+    const { role, status } = req.query;
+    if (role) list = list.filter(u => u.role === role.toUpperCase());
+    if (status) list = list.filter(u => {
+        if (status === "disabled") return u.accountStatus === "DISABLED";
+        if (status === "active")   return u.accountStatus === "APPROVED";
+        return u.accountStatus?.toLowerCase() === status.toLowerCase();
+    });
+    return res.json({ success: true, users: list, total: list.length });
 });
 
 // GET /api/auth/pending — alias for backwards compat
@@ -317,7 +324,38 @@ app.get("/api/auth/pending", (req, res) => {
     return res.json({ success: true, users: safe, data: safe, total: safe.length });
 });
 
-// PATCH /api/auth/users/:userId/approve
+// PATCH /api/auth/users/:userId (Admin — edit user fields, no password reset)
+app.patch("/api/auth/users/:userId", (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+    const user = USERS.find(u => u.userId === req.params.userId);
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    // Only allow safe fields — never overwrite role, _id, passwordHash, accountStatus via this route
+    const EDITABLE = ["firstName", "lastName", "email", "mobileNumber", "district", "state",
+                      "postingLocation", "department", "designation", "office",
+                      "assignedRoute", "vehicleRegNumber", "vehicleType", "licenseNumber"];
+    EDITABLE.forEach(f => { if (req.body[f] !== undefined) user[f] = req.body[f]; });
+    const { passwordHash, ...safe } = user;
+    return res.json({ success: true, user: safe });
+});
+
+// PATCH /api/auth/users/:userId/status (Admin — enable or disable an account)
+app.patch("/api/auth/users/:userId/status", (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+    const { status } = req.body;
+    if (!status || !["active", "disabled"].includes(status)) {
+        return res.status(400).json({ success: false, message: "status must be 'active' or 'disabled'" });
+    }
+    const user = USERS.find(u => u.userId === req.params.userId);
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (user.role === "ADMIN") return res.status(403).json({ success: false, message: "Cannot disable admin" });
+    user.accountStatus = status === "active" ? "APPROVED" : "DISABLED";
+    const { passwordHash, ...safe } = user;
+    return res.json({ success: true, user: safe });
+});
+
+// PATCH /api/auth/users/:userId/approve (keep for backwards compat)
 app.patch("/api/auth/users/:userId/approve", (req, res) => {
     const decoded = verifyToken(req);
     if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
@@ -328,7 +366,7 @@ app.patch("/api/auth/users/:userId/approve", (req, res) => {
     return res.json({ success: true, user: safe });
 });
 
-// PATCH /api/auth/users/:userId/reject
+// PATCH /api/auth/users/:userId/reject (keep for backwards compat)
 app.patch("/api/auth/users/:userId/reject", (req, res) => {
     const decoded = verifyToken(req);
     if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
@@ -390,16 +428,33 @@ app.patch("/api/roads/:id", (req, res) => {
 // ALERTS
 // ==============================
 
-app.get("/api/alerts", (req, res) => res.json({ success: true, alerts: mockAlerts, total: mockAlerts.length }));
+// GET /api/alerts — any authenticated role can read
+app.get("/api/alerts", (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
+    return res.json({ success: true, alerts: mockAlerts, total: mockAlerts.length });
+});
+
+// POST /api/alerts — admin and field officers can create alerts
 app.post("/api/alerts", (req, res) => {
-    const a = { _id: Date.now().toString(), ...req.body, timestamp: new Date(), acknowledged: false };
+    const decoded = verifyToken(req);
+    if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
+    if (decoded.role !== "ADMIN" && decoded.role !== "FIELD_OFFICER") {
+        return res.status(403).json({ success: false, message: "Admin or Field Officer only" });
+    }
+    const a = { _id: Date.now().toString(), ...req.body, createdBy: decoded.userId, timestamp: new Date(), acknowledged: false };
     mockAlerts.unshift(a);
     return res.status(201).json({ success: true, alert: a });
 });
+
 app.patch("/api/alerts/:id/acknowledge", (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
     const a = mockAlerts.find(a => a._id === req.params.id);
     if (!a) return res.status(404).json({ success: false, message: "Not found" });
     a.acknowledged = true;
+    a.acknowledgedBy = decoded.userId;
+    a.acknowledgedAt = new Date();
     return res.json({ success: true, alert: a });
 });
 

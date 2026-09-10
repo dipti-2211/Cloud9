@@ -6,7 +6,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Truck, Route, AlertTriangle, Package,
-  Bell, Settings, Navigation, UserPlus, Car, KeyRound, ShieldCheck, MapPin, AlertOctagon,
+  Bell, Settings, Navigation, UserPlus, Car, KeyRound, ShieldCheck, MapPin, AlertOctagon, UsersRound,
 } from 'lucide-react';
 import { auth } from '../../services/api';
 
@@ -40,9 +40,10 @@ export const Sidebar = () => {
     { path:'/critical-roads', label:'Critical Roads',  icon:AlertOctagon },
   ];
 
-  // Admin sees: Register Officer + Register Operator + Admin Approvals
-  // Other roles see: only Account (no self-registration links)
+  // Admin sees: Personnel hub + Register Officer + Register Operator + Account
+  // Other roles see: only Account
   const personnelItems = isAdmin ? [
+    { path:'/personnel',         label:'Personnel',         icon:UsersRound },
     { path:'/register-officer',  label:'Register Officer',  icon:UserPlus },
     { path:'/register-operator', label:'Register Operator', icon:Car },
     { path:'/account',           label:'Account',           icon:KeyRound },
