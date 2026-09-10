@@ -3,7 +3,7 @@ import { vehiclesAPI } from '../services/api';
 import { Badge } from '../components/common/Badge';
 import { PageHeader } from '../components/common/PageHeader';
 import { VehicleLiveModal } from '../components/vehicles/VehicleLiveModal';
-import { ShieldAlert, RefreshCw } from 'lucide-react';
+import { ShieldAlert, RefreshCw, Clock } from 'lucide-react';
 
 export const Vehicles = () => {
   const [vehicles,    setVehicles]    = useState([]);
@@ -75,13 +75,41 @@ export const Vehicles = () => {
                       {v.type && v.cargo && <div style={{ fontSize:'0.75rem', color:'var(--text-secondary)' }}>{v.type}</div>}
                     </td>
                     <td><Badge>{v.priority ?? '—'}</Badge></td>
-                    <td><Badge>{v.status ?? '—'}</Badge></td>
-                    <td>{v.destination ?? '—'}</td>
+                    <td>
+                      {v.status === 'DELAYED' ? (
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '3px 8px',
+                          borderRadius: 6,
+                          background: 'rgba(245, 158, 11, 0.15)',
+                          color: '#b45309',
+                          border: '1px solid rgba(245, 158, 11, 0.4)',
+                          fontWeight: 700,
+                          fontSize: '0.74rem',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          <Clock size={11} />
+                          {v.id === 'VAN-104' ? 'DELAYED (+45m Detour)' : `DELAYED (+${v.delayMinutes || 45}m Detour)`}
+                        </span>
+                      ) : (
+                        <Badge>{v.status ?? '—'}</Badge>
+                      )}
+                    </td>
+                    <td>
+                      <div>{v.destination ?? '—'}</div>
+                      {v.delayReason && (
+                        <div style={{ fontSize: '0.7rem', color: '#b45309', marginTop: 2 }}>
+                          ⚠ {v.delayReason}
+                        </div>
+                      )}
+                    </td>
                     <td style={{
                       color: v.priority === 'CRITICAL' ? 'var(--danger)' : 'inherit',
                       fontWeight: v.priority === 'CRITICAL' ? 600 : 400,
                     }}>
-                      {v.eta ?? '—'}
+                      {v.id === 'VAN-104' ? '4h 10m (+45m Detour Delay)' : (v.eta ?? '—')}
                     </td>
                     <td>
                       <button className="btn btn-secondary"

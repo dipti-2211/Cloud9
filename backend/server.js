@@ -495,13 +495,40 @@ app.get("/api/road-segments", async (req, res) => {
         // Check for any recorded incidents
         const incidents = await RoadIncident.find().select("road_segment_id created_at reported_risk_level").lean().catch(() => []);
         const incidentSegIds = new Set(incidents.map(i => i.road_segment_id?.toString()));
+        const incidentCounts = {};
+        incidents.forEach(i => {
+            const idStr = i.road_segment_id?.toString();
+            if (idStr) incidentCounts[idStr] = (incidentCounts[idStr] || 0) + 1;
+        });
 
         const enriched = segments.map(s => {
             const hasInc = incidentSegIds.has(s._id?.toString());
+            const c = Array.isArray(s.geometry?.coordinates) ? s.geometry.coordinates : [];
+            const fromCoord = Array.isArray(c[0]) ? c[0] : [];
+            const toCoord = Array.isArray(c[1]) ? c[1] : (Array.isArray(c[c.length - 1]) ? c[c.length - 1] : []);
+
+            const from_lon = (typeof s.from_lon === 'number' && !isNaN(s.from_lon)) ? s.from_lon : (typeof fromCoord[0] === 'number' ? fromCoord[0] : null);
+            const from_lat = (typeof s.from_lat === 'number' && !isNaN(s.from_lat)) ? s.from_lat : (typeof fromCoord[1] === 'number' ? fromCoord[1] : null);
+            const to_lon   = (typeof s.to_lon === 'number' && !isNaN(s.to_lon)) ? s.to_lon : (typeof toCoord[0] === 'number' ? toCoord[0] : null);
+            const to_lat   = (typeof s.to_lat === 'number' && !isNaN(s.to_lat)) ? s.to_lat : (typeof toCoord[1] === 'number' ? toCoord[1] : null);
+            const mid_lat  = (typeof s.mid_lat === 'number' && !isNaN(s.mid_lat)) ? s.mid_lat : ((from_lat != null && to_lat != null) ? parseFloat(((from_lat + to_lat) / 2).toFixed(5)) : 25.1);
+            const mid_lon  = (typeof s.mid_lon === 'number' && !isNaN(s.mid_lon)) ? s.mid_lon : ((from_lon != null && to_lon != null) ? parseFloat(((from_lon + to_lon) / 2).toFixed(5)) : 93.0);
+
+            const count = incidentCounts[s._id?.toString()] || s.historical_incident_count || 0;
+
             return {
                 ...s,
-                is_new: hasInc,
-                has_new_incident: hasInc,
+                id: s.segment_key || s._id?.toString(),
+                from_lat,
+                from_lon,
+                to_lat,
+                to_lon,
+                mid_lat,
+                mid_lon,
+                incidents_count: count,
+                is_new: Boolean(hasInc || s.is_new),
+                has_new_incident: Boolean(hasInc || s.has_new_incident),
+                last_updated: s.last_updated || new Date(),
             };
         });
 
@@ -834,10 +861,24 @@ app.post("/api/road-incidents", upload.single("photo"), async (req, res) => {
         // 8. Broadcast via WebSocket (both global and dashboard room)
         const io_ = req.app.get("io");
         if (io_) {
+            const incidentBroadcast = {
+                ...(incident && incident.toObject ? incident.toObject() : incident),
+                road_segment_id: {
+                    _id: segment._id,
+                    segment_key: segment.segment_key,
+                    road_name: segment.road_name,
+                    district: segment.district,
+                    current_risk_level: assignedRisk,
+                },
+                road_name: segment.road_name,
+                district: segment.district,
+                is_new: true,
+            };
+
             io_.emit("road_segment_updated", segBroadcast);
-            io_.emit("incident_created", incident);
+            io_.emit("incident_created", incidentBroadcast);
             io_.to("dashboard").emit("road_segment_updated", segBroadcast);
-            io_.to("dashboard").emit("incident_created", incident);
+            io_.to("dashboard").emit("incident_created", incidentBroadcast);
 
             // 9. Reroute check if segment is now high-risk
             if (assignedRisk === "high") {
@@ -960,7 +1001,33 @@ app.get("/api/critical-roads", async (req, res) => {
     try {
         const segs = await RoadSegment.find({}).lean();
         if (segs.length > 0) {
-            return res.json({ success: true, criticalRoads: segs, total: segs.length, source: "mongodb" });
+            const mapped = segs.map(s => {
+                const c = Array.isArray(s.geometry?.coordinates) ? s.geometry.coordinates : [];
+                const fromCoord = Array.isArray(c[0]) ? c[0] : [];
+                const toCoord = Array.isArray(c[1]) ? c[1] : (Array.isArray(c[c.length - 1]) ? c[c.length - 1] : []);
+
+                const from_lon = (typeof s.from_lon === 'number' && !isNaN(s.from_lon)) ? s.from_lon : (typeof fromCoord[0] === 'number' && !isNaN(fromCoord[0]) ? fromCoord[0] : null);
+                const from_lat = (typeof s.from_lat === 'number' && !isNaN(s.from_lat)) ? s.from_lat : (typeof fromCoord[1] === 'number' && !isNaN(fromCoord[1]) ? fromCoord[1] : null);
+                const to_lon   = (typeof s.to_lon === 'number' && !isNaN(s.to_lon)) ? s.to_lon : (typeof toCoord[0] === 'number' ? toCoord[0] : null);
+                const to_lat   = (typeof s.to_lat === 'number' && !isNaN(s.to_lat)) ? s.to_lat : (typeof toCoord[1] === 'number' ? toCoord[1] : null);
+                const mid_lat  = (typeof s.mid_lat === 'number' && !isNaN(s.mid_lat)) ? s.mid_lat : ((from_lat != null && to_lat != null) ? parseFloat(((from_lat + to_lat) / 2).toFixed(5)) : 25.1);
+                const mid_lon  = (typeof s.mid_lon === 'number' && !isNaN(s.mid_lon)) ? s.mid_lon : ((from_lon != null && to_lon != null) ? parseFloat(((from_lon + to_lon) / 2).toFixed(5)) : 93.0);
+                const count    = typeof s.settlement_count === 'number' ? s.settlement_count : (Array.isArray(s.settlements_cutoff) ? s.settlements_cutoff.length : 0);
+
+                return {
+                    ...s,
+                    id: s.segment_key || s._id?.toString() || `seg-${Math.random()}`,
+                    from_lat,
+                    from_lon,
+                    to_lat,
+                    to_lon,
+                    mid_lat,
+                    mid_lon,
+                    settlement_count: count,
+                    settlements_cutoff: Array.isArray(s.settlements_cutoff) ? s.settlements_cutoff : [],
+                };
+            });
+            return res.json({ success: true, criticalRoads: mapped, total: mapped.length, source: "mongodb" });
         }
     } catch (_) { /* fall through */ }
 
@@ -968,7 +1035,19 @@ app.get("/api/critical-roads", async (req, res) => {
     try {
         if (fs.existsSync(CRITICAL_ROADS_PATH)) {
             const data = JSON.parse(fs.readFileSync(CRITICAL_ROADS_PATH, "utf8"));
-            return res.json({ success: true, criticalRoads: data, total: data.length, source: "file" });
+            const mappedFile = (Array.isArray(data) ? data : []).map(s => ({
+                ...s,
+                id: s.id || s.segment_key || `seg-${Math.random()}`,
+                from_lat: typeof s.from_lat === 'number' ? s.from_lat : null,
+                from_lon: typeof s.from_lon === 'number' ? s.from_lon : null,
+                to_lat: typeof s.to_lat === 'number' ? s.to_lat : null,
+                to_lon: typeof s.to_lon === 'number' ? s.to_lon : null,
+                mid_lat: typeof s.mid_lat === 'number' ? s.mid_lat : 25.1,
+                mid_lon: typeof s.mid_lon === 'number' ? s.mid_lon : 93.0,
+                settlement_count: typeof s.settlement_count === 'number' ? s.settlement_count : (Array.isArray(s.settlements_cutoff) ? s.settlements_cutoff.length : 0),
+                settlements_cutoff: Array.isArray(s.settlements_cutoff) ? s.settlements_cutoff : [],
+            }));
+            return res.json({ success: true, criticalRoads: mappedFile, total: mappedFile.length, source: "file" });
         }
     } catch (e) { console.warn("Could not read critical_roads.json:", e.message); }
 

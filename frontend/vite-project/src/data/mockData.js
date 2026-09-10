@@ -29,15 +29,31 @@ export const alerts = [
 ];
 
 export const deliveries = [
-  { id: 'DEL-1042', vehicle: 'TRUCK-001', cargo: 'Vaccines',            priority: 'CRITICAL', source: 'Guwahati Hub', destination: 'Shillong Station', eta: '2h 15m', status: 'IN TRANSIT', progress: 65  },
-  { id: 'DEL-1043', vehicle: 'VAN-104',   cargo: 'Medical Kits',        priority: 'CRITICAL', source: 'Silchar',       destination: 'Imphal Hospital',   eta: '4h 10m', status: 'DELAYED',    progress: 30  },
-  { id: 'DEL-1044', vehicle: 'TRUCK-015', cargo: 'Construction Mat.',   priority: 'NORMAL',   source: 'Dibrugarh',    destination: 'Aizawl Center',     eta: '12h 00m',status: 'SCHEDULED',  progress: 0   },
-  { id: 'DEL-1041', vehicle: 'TRUCK-088', cargo: 'Food Supplies',       priority: 'HIGH',     source: 'Tezpur',       destination: 'Itanagar',          eta: 'Arrived', status: 'COMPLETED',  progress: 100 },
+  {
+    id: 'DEL-1042', vehicle: 'TRUCK-001', cargo: 'Vaccines', priority: 'CRITICAL',
+    source: 'Guwahati Hub', destination: 'Shillong Station', eta: '2h 15m', status: 'IN TRANSIT', progress: 65,
+  },
+  {
+    id: 'DEL-1043', vehicle: 'VAN-104', cargo: 'Medical Kits', priority: 'CRITICAL',
+    source: 'Silchar', destination: 'Imphal Hospital', eta: '4h 10m (+45m Delay)', status: 'DELAYED', progress: 30,
+    delayMinutes: 45,
+    delayLabel: '+45m Detour Delay',
+    rerouteReason: '⚠ Detour Active: Rerouted via SH-12 due to landslide on NH-37',
+    originalEta: '3h 25m',
+  },
+  {
+    id: 'DEL-1044', vehicle: 'TRUCK-015', cargo: 'Construction Mat.', priority: 'NORMAL',
+    source: 'Dibrugarh', destination: 'Aizawl Center', eta: '12h 00m', status: 'SCHEDULED', progress: 0,
+  },
+  {
+    id: 'DEL-1041', vehicle: 'TRUCK-088', cargo: 'Food Supplies', priority: 'HIGH',
+    source: 'Tezpur', destination: 'Itanagar', eta: 'Arrived', status: 'COMPLETED', progress: 100,
+  },
 ];
 
 export const vehicles = [
   {
-    id: 'TRUCK-001', type: 'Refrigerated', cargo: 'Vaccines',          priority: 'CRITICAL',
+    id: 'TRUCK-001', type: 'Refrigerated', cargo: 'Vaccines', priority: 'CRITICAL',
     status: 'IN TRANSIT', destination: 'Guwahati Hub', eta: '2h 15m',
     driver: 'Rajesh Kumar', speed: 42,
     position: [25.5788, 91.8933],
@@ -49,16 +65,21 @@ export const vehicles = [
     ],
   },
   {
-    id: 'TRUCK-002', type: 'Heavy Cargo',  cargo: 'Food Supplies',     priority: 'HIGH',
-    status: 'DELAYED',     destination: 'Shillong Station', eta: '5h 40m',
-    driver: 'Amit Singh',  speed: 0,
+    id: 'TRUCK-002', type: 'Heavy Cargo', cargo: 'Food Supplies', priority: 'HIGH',
+    status: 'DELAYED', destination: 'Shillong Station', eta: '5h 40m (+1h 10m delay)',
+    driver: 'Amit Singh', speed: 0,
     position: [25.5788, 91.8933],
+    delayMinutes: 70,
+    delayReason: 'Slow traffic crawl behind landslide clearance convoy',
   },
   {
-    id: 'VAN-104',   type: 'Light Utility',cargo: 'Medical Kits',      priority: 'CRITICAL',
-    status: 'RE-ROUTING',  destination: 'Imphal Hospital', eta: '4h 10m',
-    driver: 'Priya Devi',  speed: 28,
+    id: 'VAN-104', type: 'Light Utility', cargo: 'Medical Kits', priority: 'CRITICAL',
+    status: 'DELAYED', destination: 'Imphal Hospital', eta: '4h 10m (+45m Detour Delay)',
+    driver: 'Priya Devi', speed: 28,
     position: [24.8170, 93.9368],
+    delayMinutes: 45,
+    delayLabel: '+45m Detour',
+    delayReason: 'Landslide Detour: Rerouted via SH-12 to bypass NH-37 hazard',
   },
   {
     id: 'TRUCK-015', type: 'Standard',     cargo: 'Construction Mat.', priority: 'NORMAL',

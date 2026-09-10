@@ -107,11 +107,62 @@ export const vehiclesAPI = {
 };
 
 // ─── Roads ───────────────────────────────────────────────────────────────────
-// Backend → { success, roads:[...], total }
+// Backend → /api/road-segments + /api/road-incidents
 export const roadsAPI = {
   getAll: async () => {
-    const data = await request('/api/roads');
-    return data.roads?.length ? data.roads : mockRoads;
+    try {
+      const [segRes, incRes] = await Promise.all([
+        request('/api/road-segments').catch(() => null),
+        request('/api/road-incidents').catch(() => null),
+      ]);
+
+      const segments = segRes?.success && Array.isArray(segRes.roadSegments) ? segRes.roadSegments : [];
+      const liveIncidents = incRes?.success && Array.isArray(incRes.incidents) ? incRes.incidents : [];
+
+      const incCountMap = {};
+      liveIncidents.forEach(inc => {
+        const segId = inc.road_segment_id?._id || inc.road_segment_id?.id || inc.road_segment_id?.segment_key;
+        const roadName = inc.road_segment_id?.road_name;
+        if (segId) incCountMap[segId] = (incCountMap[segId] || 0) + 1;
+        if (roadName) incCountMap[roadName] = (incCountMap[roadName] || 0) + 1;
+      });
+
+      const formattedSegments = segments.map(s => {
+        const segKey = s.segment_key || s._id;
+        const count = incCountMap[s._id] || incCountMap[s.segment_key] || incCountMap[s.road_name] || s.incidents_count || s.historical_incident_count || 0;
+        const score = Math.round((s.current_risk_score ?? (s.current_risk_level === 'high' ? 0.88 : s.current_risk_level === 'medium' ? 0.48 : 0.15)) * 100);
+        let status = 'OPEN';
+        if (s.current_risk_level === 'high') {
+          status = (score >= 80 || count > 0 || s.has_new_incident || s.is_new) ? 'BLOCKED' : 'HIGH RISK';
+        } else if (s.current_risk_level === 'medium') {
+          status = 'CAUTION';
+        }
+
+        const name = (s.from_node && s.to_node)
+          ? `${s.road_name}: ${s.from_node} – ${s.to_node}`
+          : `${s.road_name} (${s.district || 'NER'})`;
+
+        return {
+          id: s.road_name || segKey,
+          segment_key: segKey,
+          _id: s._id,
+          name,
+          status,
+          riskScore: score,
+          incidents: count,
+          lastUpdated: (s.is_new || s.has_new_incident) ? 'Just now' : '10 min ago',
+          isNew: Boolean(s.is_new || s.has_new_incident),
+        };
+      });
+
+      // Keep corridor roads (NH-06, NH-10, SH-37, NH-2) while adding all active segments
+      const existingRoadNames = new Set(formattedSegments.map(r => r.id));
+      const remainingMock = mockRoads.filter(m => !existingRoadNames.has(m.id));
+
+      return [...formattedSegments, ...remainingMock];
+    } catch {
+      return mockRoads;
+    }
   },
   create: (payload) => request('/api/roads',       { method: 'POST',   body: JSON.stringify(payload) }),
   update: (id, p)   => request(`/api/roads/${id}`, { method: 'PATCH',  body: JSON.stringify(p) }),
@@ -122,7 +173,7 @@ export const roadsAPI = {
 // Backend → { success, incidents:[...], total }
 export const incidentsAPI = {
   getAll: async () => {
-    const data = await request('/api/incidents');
+    const data = await request('/api/road-incidents').catch(() => request('/api/incidents'));
     return data.incidents?.length ? data.incidents : mockIncidents;
   },
   create: (payload) => request('/api/incidents',       { method: 'POST',   body: JSON.stringify(payload) }),
@@ -134,8 +185,8 @@ export const incidentsAPI = {
 // Backend → { success, deliveries:[...], total }
 export const deliveriesAPI = {
   getAll: async () => {
-    const data = await request('/api/deliveries');
-    return data.deliveries?.length ? data.deliveries : mockDeliveries;
+    const data = await request('/api/deliveries').catch(() => ({}));
+    return data.deliveries?.length ? data.deliveries : (data.data?.length ? data.data : mockDeliveries);
   },
   create: (payload) => request('/api/deliveries',       { method: 'POST',  body: JSON.stringify(payload) }),
   update: (id, p)   => request(`/api/deliveries/${id}`, { method: 'PATCH', body: JSON.stringify(p) }),

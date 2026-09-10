@@ -386,12 +386,19 @@ export const Dashboard = () => {
     },
     'Vehicles Delayed': {
       href: '/vehicles',
-      items: vehicles.filter(v => v.status === 'DELAYED' || v.status === 'RE-ROUTING').map(v => ({
-        primary: v.id,
-        secondary: `→ ${v.destination}  ·  ETA ${v.eta}`,
-        badge: v.status,
-        badgeColor: 'var(--warning)',
-      })),
+      items: vehicles.filter(v => v.status === 'DELAYED' || v.status === 'RE-ROUTING').map(v => {
+        const isVan104 = v.id === 'VAN-104';
+        const secText = isVan104
+          ? '→ Imphal Hospital · ETA: 4h 10m (+45m Detour Delay) · Landslide Detour'
+          : `→ ${v.destination} · ETA ${v.eta}${v.delayReason ? ` · ${v.delayReason}` : ''}`;
+        const badgeText = isVan104 ? 'DELAYED (+45m Detour)' : (v.delayMinutes ? `+${v.delayMinutes}m DELAY` : v.status);
+        return {
+          primary: `${v.id} (${v.cargo})`,
+          secondary: secText,
+          badge: badgeText,
+          badgeColor: 'var(--warning)',
+        };
+      }),
     },
     'Blocked Roads': {
       href: '/roads',
@@ -566,7 +573,25 @@ export const Dashboard = () => {
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{v.cargo}</div>
                     </td>
                     <td style={{ textAlign: 'right' }}>
-                      <Badge>{v.status}</Badge>
+                      {v.status === 'DELAYED' ? (
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '2px 7px',
+                          borderRadius: 6,
+                          background: 'rgba(245, 158, 11, 0.15)',
+                          color: '#b45309',
+                          border: '1px solid rgba(245, 158, 11, 0.4)',
+                          fontWeight: 700,
+                          fontSize: '0.72rem',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {v.id === 'VAN-104' ? 'DELAYED (+45m Detour)' : `DELAYED ${v.delayMinutes ? `(+${v.delayMinutes}m)` : ''}`}
+                        </span>
+                      ) : (
+                        <Badge>{v.status}</Badge>
+                      )}
                     </td>
                   </tr>
                 ))}

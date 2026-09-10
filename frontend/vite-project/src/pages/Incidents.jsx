@@ -9,7 +9,7 @@
  *            error, the report is saved to localStorage['sih_offline_incidents'] and
  *            synced automatically when the browser goes online.
  */
-import { incidents } from '../data/mockData';
+import { incidents as initialMockIncidents } from '../data/mockData';
 import { Badge } from '../components/common/Badge';
 import { PageHeader } from '../components/common/PageHeader';
 import { useNavigate } from 'react-router-dom';
@@ -19,10 +19,58 @@ import {
 } from 'recharts';
 import toast from 'react-hot-toast';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Camera, X, MapPin, Loader } from 'lucide-react';
+import { Camera, X, MapPin, Loader, RefreshCw } from 'lucide-react';
 import { useUserLocation } from '../hooks/useUserLocation';
 import { reverseGeocode, incidentsAPI } from '../services/api';
 import { useLang } from '../i18n/LanguageContext';
+import { useSocket } from '../hooks/useSocket';
+
+const formatLiveIncident = (item) => {
+  const shortId = item._id ? `INC-${item._id.slice(-4).toUpperCase()}` : (item.id || 'INC-LIVE');
+  const typeMap = {
+    landslide: 'Landslide',
+    rockfall: 'Landslide',
+    flooding: 'Heavy Rainfall',
+    heavy_rain: 'Heavy Rainfall',
+    road_damage: 'Bridge / Road Damage',
+    bridge_damage: 'Bridge / Road Damage',
+    accident: 'Mechanical Breakdown',
+    breakdown: 'Mechanical Breakdown',
+    overspeeding: 'Overspeeding',
+  };
+  const rawType = (item.incident_type || item.type || 'landslide').toLowerCase();
+  const cause = typeMap[rawType] || 'Landslide';
+  const displayType = rawType === 'landslide' ? 'Landslide' :
+                      rawType === 'rockfall' ? 'Rockfall' :
+                      rawType === 'road_damage' ? 'Bridge Damage' :
+                      rawType === 'flooding' ? 'Heavy Rainfall' :
+                      rawType.charAt(0).toUpperCase() + rawType.slice(1);
+
+  const roadName = item.road_segment_id?.road_name || item.road_name || item.locationLabel || 'NER Corridor';
+  const district = (item.road_segment_id?.district || item.district) ? `, ${item.road_segment_id?.district || item.district}` : '';
+  const location = `${roadName}${district}`;
+  const rawSev = (item.reported_risk_level || item.severity || 'CRITICAL').toUpperCase();
+  const severity = (rawSev === 'HIGH' || rawSev === 'CRITICAL') ? 'CRITICAL' : (rawSev === 'MEDIUM' || rawSev === 'WARNING') ? 'WARNING' : 'INFO';
+  const time = item.created_at
+    ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : 'Just now';
+
+  return {
+    id: shortId,
+    rawId: item._id || item.id,
+    type: displayType,
+    cause: cause,
+    location: location,
+    severity: severity,
+    time: time,
+    status: 'ACTIVE',
+    isLive: true,
+    isNew: Boolean(item.is_new ?? item.isNew ?? true),
+    roadBlock: item.road_block,
+    trafficCondition: item.traffic_condition,
+    description: item.description,
+  };
+};
 
 // Offline queue helpers
 const QUEUE_KEY = 'sih_offline_incidents';
@@ -197,26 +245,80 @@ export const Incidents = () => {
     setSubmitting(false);
   };
 
+  // ── Live Incidents State & Socket Sync ──────────────────────────────────────
+  const [incidentList, setIncidentList] = useState(initialMockIncidents);
+  const [loadingLive,  setLoadingLive]  = useState(true);
+  const { socket } = useSocket();
+
+  const loadIncidents = useCallback(async () => {
+    setLoadingLive(true);
+    try {
+      const baseUrl = import.meta.env.VITE_API_URL || '';
+      const res = await fetch(`${baseUrl}/api/road-incidents`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.incidents) && data.incidents.length > 0) {
+        const liveFormatted = data.incidents.map(item => ({
+          ...formatLiveIncident(item),
+          isNew: Boolean(item.is_new ?? false),
+        }));
+        const liveIds = new Set(liveFormatted.map(i => i.id));
+        const merged = [...liveFormatted, ...initialMockIncidents.filter(i => !liveIds.has(i.id))];
+        setIncidentList(merged);
+      } else {
+        setIncidentList(initialMockIncidents);
+      }
+    } catch {
+      setIncidentList(initialMockIncidents);
+    } finally {
+      setLoadingLive(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadIncidents();
+  }, [loadIncidents]);
+
+  useEffect(() => {
+    const s = socket.current;
+    if (!s) return;
+
+    const handleNewIncident = (incoming) => {
+      const formatted = formatLiveIncident(incoming);
+      formatted.isNew = true;
+      setIncidentList(prev => [formatted, ...prev.filter(x => x.id !== formatted.id)]);
+      toast.success(`New incident reported: ${formatted.type} on ${formatted.location}`, { icon: '🚨' });
+    };
+
+    s.on('incident_created', handleNewIncident);
+    return () => {
+      s.off('incident_created', handleNewIncident);
+    };
+  }, [socket]);
+
   // ── Chart data ────────────────────────────────────────────────────────────
   const causeData = useMemo(() => {
     const counts = {};
-    incidents.forEach(inc => {
+    incidentList.forEach(inc => {
       const cause = inc.cause ?? inc.type ?? 'Other';
       counts[cause] = (counts[cause] ?? 0) + 1;
     });
     return Object.entries(counts)
       .map(([cause, count]) => ({ cause, count }))
       .sort((a, b) => b.count - a.count);
-  }, []);
+  }, [incidentList]);
 
-  const total            = incidents.length;
+  const total            = incidentList.length;
   const landslideCount   = causeData.find(d => d.cause === 'Landslide')?.count ?? 0;
   const landslidePercent = total > 0 ? Math.round((landslideCount / total) * 100) : 0;
 
   const severityOrder   = { CRITICAL: 0, WARNING: 1, INFO: 2 };
-  const sortedIncidents = [...incidents].sort(
-    (a, b) => (severityOrder[a.severity] ?? 9) - (severityOrder[b.severity] ?? 9)
-  );
+  const sortedIncidents = useMemo(() => {
+    return [...incidentList].sort((a, b) => {
+      if (a.isNew && !b.isNew) return -1;
+      if (!a.isNew && b.isNew) return 1;
+      return (severityOrder[a.severity] ?? 9) - (severityOrder[b.severity] ?? 9);
+    });
+  }, [incidentList]);
 
   const modalFooter = (
     <>
@@ -231,8 +333,22 @@ export const Incidents = () => {
     <div>
       <PageHeader
         title="Incident Management"
-        description="Monitor and report GIS anomalies and road blockages. Fleet Ops module — illustrative scenario data."
-        actionButton={<button className="btn btn-primary" onClick={() => navigate('/incident-report')}>+ Report Incident</button>}
+        description="Monitor and report GIS anomalies, roadblocks, and field incidents in real time."
+        actionButton={
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={loadIncidents}
+              disabled={loadingLive}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', fontSize: '0.82rem' }}
+            >
+              <RefreshCw size={13} className={loadingLive ? 'spin' : ''} /> Refresh
+            </button>
+            <button className="btn btn-primary" onClick={() => navigate('/incident-report')}>
+              + Report Incident
+            </button>
+          </div>
+        }
       />
       <DataSourceNote />
 
@@ -249,7 +365,7 @@ export const Incidents = () => {
           </div>
         </div>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '18px' }}>
-          Horizontal bars sorted by frequency — highest cause at top
+          Horizontal bars sorted by frequency — live updates from field reports
         </div>
 
         <ResponsiveContainer width="100%" height={causeData.length * 44 + 20}>
@@ -295,9 +411,33 @@ export const Incidents = () => {
             </thead>
             <tbody>
               {sortedIncidents.map(inc => (
-                <tr key={inc.id}>
-                  <td style={{ fontWeight: 600 }}>{inc.id}</td>
-                  <td>{inc.type}</td>
+                <tr key={inc.rawId || inc.id} style={inc.isNew ? { background: 'rgba(239, 68, 68, 0.05)' } : undefined}>
+                  <td style={{ fontWeight: 600 }}>
+                    {inc.id}
+                    {inc.isNew && (
+                      <span style={{
+                        marginLeft: 6,
+                        fontSize: '0.62rem',
+                        fontWeight: 800,
+                        color: '#ef4444',
+                        background: 'rgba(239,68,68,0.14)',
+                        padding: '1px 5px',
+                        borderRadius: 4,
+                        border: '1px solid rgba(239,68,68,0.35)',
+                        letterSpacing: '0.04em',
+                      }}>
+                        NEW
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <div style={{ fontWeight: 500 }}>{inc.type}</div>
+                    {inc.trafficCondition && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        Traffic: {inc.trafficCondition}
+                      </div>
+                    )}
+                  </td>
                   <td>
                     <span style={{
                       fontSize: '0.75rem', padding: '2px 8px', borderRadius: 8,
@@ -309,10 +449,17 @@ export const Incidents = () => {
                       {inc.cause ?? inc.type}
                     </span>
                   </td>
-                  <td>{inc.location}</td>
-                  <td><Badge>{inc.severity}</Badge></td>
+                  <td>
+                    <div>{inc.location}</div>
+                    {inc.roadBlock && inc.roadBlock !== 'none' && (
+                      <div style={{ fontSize: '0.7rem', color: '#ef4444', fontWeight: 600 }}>
+                        Blockage: {inc.roadBlock.toUpperCase()}
+                      </div>
+                    )}
+                  </td>
+                  <td><Badge type={inc.severity === 'CRITICAL' ? 'danger' : inc.severity === 'WARNING' ? 'warning' : 'default'}>{inc.severity}</Badge></td>
                   <td>{inc.time}</td>
-                  <td><Badge>{t(inc.status) || inc.status}</Badge></td>
+                  <td><Badge type={inc.status === 'ACTIVE' ? 'danger' : 'default'}>{t(inc.status) || inc.status}</Badge></td>
                 </tr>
               ))}
             </tbody>
