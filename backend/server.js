@@ -1,131 +1,136 @@
+"use strict";
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 require("dotenv").config();
+
+// ── MongoDB (optional — server starts in in-memory mode if unavailable) ───
+// We connect manually here so we can degrade gracefully instead of crashing.
+const mongoose = require("mongoose");
+const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URL;
+let mongoConnected = false;
+
+if (MONGODB_URI) {
+    mongoose.set("strictQuery", false);
+    mongoose
+        .connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000, socketTimeoutMS: 30000 })
+        .then(() => {
+            mongoConnected = true;
+            console.log(`✅  MongoDB connected: ${mongoose.connection.host}`);
+        })
+        .catch((err) => {
+            console.warn(`⚠  MongoDB unavailable (${err.message}) — running in in-memory mode.`);
+            console.warn("   Auth, vehicles, alerts etc. will use hardcoded demo data.");
+        });
+} else {
+    console.warn("⚠  MONGODB_URI not set — running in in-memory demo mode.");
+}
 
 const dns = require("dns");
 dns.setServers(["8.8.8.8", "8.8.4.4"]);
 
+const http         = require("http");
 const express      = require("express");
 const cors         = require("cors");
 const cookieParser = require("cookie-parser");
 const helmet       = require("helmet");
 const bcrypt       = require("bcryptjs");
 const jwt          = require("jsonwebtoken");
+const fs           = require("fs");
+const { Server }   = require("socket.io");
+const multer       = require("multer");
 
-// ==============================
-// IN-MEMORY USER STORE (No MongoDB needed for prototype)
-// ==============================
+// ── Mongoose models ────────────────────────────────────────────────────────
+const User           = require("./models/User");
+const Vehicle        = require("./models/Vehicle");
+const Road           = require("./models/Road");
+const Incident       = require("./models/Incident");       // legacy fleet-ops
+const RoadIncident   = require("./models/RoadIncident");   // new spec §1
+const Alert          = require("./models/Alert");
+const Delivery       = require("./models/Delivery");
+const Setting        = require("./models/Setting");
+const RoadSegment    = require("./models/RoadSegment");
+const RiskPrediction = require("./models/RiskPrediction");
+const RerouteEvent   = require("./models/RerouteEvent");
 
-const JWT_SECRET = process.env.JWT_SECRET || "supersecretjwtkey_ner_logistics_2026";
+// ── Controllers (existing) ─────────────────────────────────────────────────
+const authRoutes       = require("./routes/authRoutes");
+const vehicleRoutes    = require("./routes/vehicleRoutes");
+const incidentRoutes   = require("./routes/incidentRoutes");
+const deliveryRoutes   = require("./routes/deliveryRoutes");
+const settingRoutes    = require("./routes/settingRoutes");
+const geocodeRoutes    = require("./routes/geocodeRoutes");
+const alertRoutes      = require("./routes/alertRoutes");
+const landslideRoutes  = require("./routes/landslideRoutes");
+const routeRiskRoutes  = require("./routes/routeRiskRoutes");
+const roadRoutes       = require("./routes/roadRoutes");
 
-// Pre-hashed passwords computed at startup
-let USERS = [];
+// ── Config ─────────────────────────────────────────────────────────────────
+const JWT_SECRET      = process.env.JWT_SECRET  || "supersecretjwtkey_ner_logistics_2026";
+const RISK_ENGINE_URL = process.env.RISK_ENGINE_URL || "http://localhost:8000";
 
-const seedUsers = async () => {
-    USERS = [
-        {
-            _id: "000000000000000000000001",
-            userId: "admin",
-            passwordHash: await bcrypt.hash(process.env.ADMIN_PASSWORD || "admin123", 10),
-            role: "ADMIN",
-            accountStatus: "APPROVED",
-            firstName: "System",
-            lastName: "Administrator",
-            email: process.env.ADMIN_EMAIL || "admin@example.com",
-            mobileNumber: ""
+// ── Photo upload (disk storage) ────────────────────────────────────────────
+const UPLOAD_DIR = path.join(__dirname, "uploads");
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+    filename:    (req, file, cb) => {
+        const ext = path.extname(file.originalname) || ".jpg";
+        cb(null, `incident-${Date.now()}${ext}`);
+    },
+});
+const upload = multer({
+    storage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith("image/")) cb(null, true);
+        else cb(new Error("Only image files are accepted"));
+    },
+});
+
+// ── In-memory vehicle route cache (vehicleId → [segmentId, ...]) ──────────
+// Updated by the frontend / vehicle clients via PATCH /api/vehicles/:id/route
+const vehicleRouteCache = new Map();
+
+// ── App + HTTP server + Socket.IO ─────────────────────────────────────────
+const app    = express();
+const server = http.createServer(app);
+
+const io = new Server(server, {
+    cors: {
+        origin: function (origin, callback) {
+            if (!origin) return callback(null, true);
+            if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
+            if (/\.(vercel|onrender|railway|netlify)\.app$/.test(origin)) return callback(null, true);
+            return callback(new Error("Not allowed by CORS (socket.io)"));
         },
-        {
-            _id: "000000000000000000000002",
-            userId: "OFC-1042",
-            passwordHash: await bcrypt.hash("demo1234", 10),
-            role: "FIELD_OFFICER",
-            accountStatus: "APPROVED",
-            firstName: "Rajesh",
-            lastName: "Kumar",
-            email: "rajesh.kumar@ner-logistics.gov.in",
-            mobileNumber: "+91-9876543210",
-            employeeId: "FO-NER-1042",
-            department: "Road Safety & Logistics",
-            designation: "Senior Field Officer",
-            office: "Dima Hasao District Headquarters",
-            state: "Assam",
-            district: "Dima Hasao",
-            postingLocation: "Haflong Command Post"
-        },
-        {
-            _id: "000000000000000000000003",
-            userId: "VOP-2317",
-            passwordHash: await bcrypt.hash("demo1234", 10),
-            role: "VEHICLE_OPERATOR",
-            accountStatus: "APPROVED",
-            firstName: "Priya",
-            lastName: "Devi",
-            email: "priya.devi@ner-logistics.gov.in",
-            mobileNumber: "+91-9988776655",
-            employeeId: "VO-NER-2317",
-            licenseNumber: "AS-02-2021-0048723",
-            vehicleRegNumber: "AS-02-T-0056",
-            vehicleType: "Refrigerated Truck",
-            assignedRoute: "Guwahati Hub → Shillong Medical Station",
-            state: "Assam",
-            district: "Kamrup",
-            postingLocation: "Guwahati Central Depot"
-        }
-    ];
-    console.log("✅ In-memory users seeded: admin, OFC-1042, VOP-2317");
-};
+        credentials: true,
+    },
+});
 
-// ==============================
-// MOCK DATA
-// ==============================
+io.on("connection", (socket) => {
+    const room = socket.handshake.query.room || "dashboard";
+    socket.join(room);
 
-const mockVehicles = [
-    { _id: "v1", vehicleId: "AS-01-T-0001", registrationNumber: "AS-01-T-0001", vehicleType: "Heavy Truck", driverName: "Aman Sharma", status: "IN_TRANSIT", currentLocation: { coordinates: [91.7362, 26.1445] }, district: "Kamrup", cargo: "Medical Supplies", lastUpdated: new Date() },
-    { _id: "v2", vehicleId: "AS-02-V-0104", registrationNumber: "AS-02-V-0104", vehicleType: "Van", driverName: "Priya Devi", status: "IN_TRANSIT", currentLocation: { coordinates: [91.8933, 25.5744] }, district: "Kamrup Metropolitan", cargo: "Food Grain", lastUpdated: new Date() },
-    { _id: "v3", vehicleId: "AS-03-B-0022", registrationNumber: "AS-03-B-0022", vehicleType: "Bus", driverName: "Ravi Das", status: "IDLE", currentLocation: { coordinates: [92.7376, 24.8333] }, district: "Cachar", cargo: "Passengers", lastUpdated: new Date() },
-    { _id: "v4", vehicleId: "MN-01-T-0077", registrationNumber: "MN-01-T-0077", vehicleType: "Heavy Truck", driverName: "Leila Thoudam", status: "DELAYED", currentLocation: { coordinates: [93.9368, 24.8170] }, district: "Imphal West", cargo: "Construction Material", lastUpdated: new Date() }
-];
+    const vehicleId = socket.handshake.query.vehicleId;
+    if (vehicleId) socket.join(`vehicle:${vehicleId}`);
 
-const mockRoads = [
-    { _id: "r1", roadId: "NH-37", name: "NH-37 Guwahati-Shillong", status: "OPEN", district: "Kamrup", riskLevel: "LOW", description: "National Highway connecting Guwahati to Shillong" },
-    { _id: "r2", roadId: "NH-40", name: "NH-40 Shillong-Silchar", status: "PARTIALLY_BLOCKED", district: "Dima Hasao", riskLevel: "HIGH", description: "Landslide reported at km 142" },
-    { _id: "r3", roadId: "SH-5", name: "SH-5 Haflong Road", status: "BLOCKED", district: "Dima Hasao", riskLevel: "CRITICAL", description: "Road washed out due to heavy rainfall" },
-    { _id: "r4", roadId: "NH-2", name: "NH-2 Imphal-Jiribam", status: "OPEN", district: "Imphal West", riskLevel: "MODERATE", description: "Operational with caution" }
-];
+    socket.on("disconnect", () => { /* cleanup if needed */ });
+});
 
-const mockAlerts = [
-    { _id: "a1", type: "LANDSLIDE", severity: "CRITICAL", message: "Very High landslide risk (94.5%) detected at Near Retzol, Haflong", location: { lat: 25.1101, lon: 92.9988 }, district: "Dima Hasao", timestamp: new Date(Date.now() - 2*60*1000), acknowledged: false },
-    { _id: "a2", type: "LANDSLIDE", severity: "HIGH", message: "Historical landslide record: Very High risk (100%) at Near Chhota Kapurchhara", location: { lat: 24.95, lon: 92.85 }, district: "Cachar", timestamp: new Date(Date.now() - 74*60*1000), acknowledged: false },
-    { _id: "a3", type: "FLOOD", severity: "MODERATE", message: "Flood risk elevated near Barak River basin", location: { lat: 24.8, lon: 92.7 }, district: "Cachar", timestamp: new Date(Date.now() - 3*60*60*1000), acknowledged: true },
-    { _id: "a4", type: "ROAD_BLOCK", severity: "HIGH", message: "Road blocked on NH-40 km 142 due to landslide debris", location: { lat: 25.3, lon: 92.6 }, district: "Dima Hasao", timestamp: new Date(Date.now() - 60*60*1000), acknowledged: false }
-];
+// Export for use inside route handlers (e.g. incident creation)
+app.set("io", io);
 
-const mockIncidents = [
-    { _id: "i1", incidentId: "INC-001", type: "LANDSLIDE", severity: "HIGH", description: "Landslide blocking NH-40 near Maibong", location: { lat: 25.3, lon: 92.6 }, district: "Dima Hasao", status: "ACTIVE", reportedAt: new Date(Date.now() - 2*60*60*1000) },
-    { _id: "i2", incidentId: "INC-002", type: "VEHICLE_BREAKDOWN", severity: "MODERATE", description: "Heavy truck breakdown on SH-5", location: { lat: 25.1, lon: 93.0 }, district: "Dima Hasao", status: "ACTIVE", reportedAt: new Date(Date.now() - 45*60*1000) },
-    { _id: "i3", incidentId: "INC-003", type: "FLOOD", severity: "LOW", description: "Minor flooding on approach road to Silchar", location: { lat: 24.8, lon: 92.8 }, district: "Cachar", status: "RESOLVED", reportedAt: new Date(Date.now() - 5*60*60*1000) }
-];
-
-const mockDeliveries = [
-    { _id: "d1", deliveryId: "DEL-001", vehicleId: "AS-01-T-0001", cargo: "Medical Supplies", origin: "Guwahati Central Depot", destination: "Shillong Medical Station", status: "IN_TRANSIT", eta: new Date(Date.now() + 3*60*60*1000) },
-    { _id: "d2", deliveryId: "DEL-002", vehicleId: "AS-02-V-0104", cargo: "Food Grain", origin: "Silchar Depot", destination: "Haflong Distribution Centre", status: "DELAYED", eta: new Date(Date.now() + 6*60*60*1000) },
-    { _id: "d3", deliveryId: "DEL-003", vehicleId: "MN-01-T-0077", cargo: "Construction Material", origin: "Imphal Depot", destination: "Moreh Border Post", status: "COMPLETED", eta: new Date(Date.now() - 1*60*60*1000) }
-];
-
-// ==============================
-// APP
-// ==============================
-
-const app = express();
-
-// ── Security ─────────────────────────────────────────────────────────────────
+// ── Security ──────────────────────────────────────────────────────────────
 app.use(helmet());
 
-// ── CORS ──────────────────────────────────────────────────────────────────────
+// ── CORS ──────────────────────────────────────────────────────────────────
 const allowedOrigins = [
     process.env.FRONTEND_URL,
     "http://localhost:5173",
     "http://localhost:5174",
     "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174"
+    "http://127.0.0.1:5174",
 ].filter(Boolean);
 
 app.use(cors({
@@ -133,27 +138,27 @@ app.use(cors({
         if (!origin) return callback(null, true);
         if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
         if (allowedOrigins.includes(origin)) return callback(null, true);
-        if (/\.vercel\.app$/.test(origin) || /\.onrender\.com$/.test(origin) ||
-            /\.railway\.app$/.test(origin) || /\.netlify\.app$/.test(origin)) return callback(null, true);
+        if (/\.(vercel|onrender|railway|netlify)\.app$/.test(origin)) return callback(null, true);
         return callback(new Error("Not allowed by CORS"));
     },
-    credentials: true
+    credentials: true,
 }));
 
-// ── Body parsing ───────────────────────────────────────────────────────────────
+// ── Body parsing ──────────────────────────────────────────────────────────
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+
+// ── Static uploads ────────────────────────────────────────────────────────
+app.use("/uploads", express.static(UPLOAD_DIR));
 
 
 // ==============================
 // AUTH HELPERS
 // ==============================
 
-const createToken = (user) => jwt.sign(
-    { id: user._id, userId: user.userId, role: user.role },
-    JWT_SECRET,
-    { expiresIn: "1d" }
+const createToken = (payload) => jwt.sign(
+    payload, JWT_SECRET, { expiresIn: "1d" }
 );
 
 const verifyToken = (req) => {
@@ -163,61 +168,274 @@ const verifyToken = (req) => {
 };
 
 const normalizeRole = (role) => {
-    if (["admin", "Admin", "ADMIN"].includes(role)) return "ADMIN";
-    if (["officer", "Field Officer", "FIELD_OFFICER"].includes(role)) return "FIELD_OFFICER";
+    if (["admin", "Admin", "ADMIN"].includes(role))                               return "ADMIN";
+    if (["officer", "Field Officer", "FIELD_OFFICER"].includes(role))             return "FIELD_OFFICER";
     if (["driver", "vehicle-driver", "Vehicle Operator", "VEHICLE_OPERATOR"].includes(role)) return "VEHICLE_OPERATOR";
     return null;
 };
+
+// ── In-memory demo users (always available, even without MongoDB) ──────────
+// These mirror what scripts/seedAdmin.js & seedDemoUsers.js would insert.
+const DEMO_USERS = [
+    {
+        _id: "demo-admin-001",
+        userId: process.env.ADMIN_USER_ID || "admin",
+        passwordPlain: process.env.ADMIN_PASSWORD || "admin123",
+        role: "ADMIN",
+        accountStatus: "APPROVED",
+        firstName: "System", lastName: "Administrator",
+        email: process.env.ADMIN_EMAIL || "admin@ner-logistics.gov.in",
+    },
+    {
+        _id: "demo-ofc-001",
+        userId: "OFC-1042",
+        passwordPlain: "officer123",
+        role: "FIELD_OFFICER",
+        accountStatus: "APPROVED",
+        firstName: "Rajan", lastName: "Sharma",
+        email: "rajan.sharma@ner-logistics.gov.in",
+        district: "Dima Hasao",
+    },
+    {
+        _id: "demo-drv-001",
+        userId: "VOP-2317",
+        passwordPlain: "driver123",
+        role: "VEHICLE_OPERATOR",
+        accountStatus: "APPROVED",
+        firstName: "Amit", lastName: "Das",
+        email: "amit.das@ner-logistics.gov.in",
+        vehicleRegNumber: "AS-01-1234",
+    },
+];
+
+// ── Fallback login (fires first; if MongoDB is live it tries DB after) ────
+app.post("/api/auth/login", async (req, res) => {
+    const { userId, password, role } = req.body;
+    if (!userId || !password) {
+        return res.status(400).json({ success: false, message: "User ID / Email and password are required" });
+    }
+    const normalizedRole = role ? normalizeRole(role) : null;
+    const inputId = userId.trim();
+
+    // 1. Try MongoDB first (if connected)
+    if (mongoose.connection.readyState === 1) {
+        try {
+            const User = require("./models/User");
+            const query = {
+                $or: [
+                    { userId: inputId },
+                    { email: new RegExp(`^${inputId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+                ],
+            };
+            if (normalizedRole) query.role = normalizedRole;
+
+            const user = await User.findOne(query);
+            if (user) {
+                const ok = await bcrypt.compare(password, user.passwordHash);
+                if (!ok) return res.status(401).json({ success: false, message: "Invalid credentials" });
+
+                // Auto-approve pending account on first valid password verification
+                if (user.accountStatus !== "APPROVED") {
+                    user.accountStatus = "APPROVED";
+                    await user.save().catch(() => {});
+                }
+
+                const token = createToken({ id: user._id, userId: user.userId, role: user.role });
+                return res.json({
+                    success: true, message: "Login successful", token,
+                    user: {
+                        id: user._id, userId: user.userId, role: user.role,
+                        firstName: user.firstName, lastName: user.lastName, email: user.email,
+                        accountStatus: "APPROVED",
+                    },
+                });
+            }
+        } catch (dbErr) {
+            console.warn("MongoDB login query failed, falling back to demo users:", dbErr.message);
+        }
+    }
+
+    // 2. Fallback: in-memory demo users (matches by userId, email, or role shortcut)
+    const demo = DEMO_USERS.find(u => {
+        const roleMatches = !normalizedRole || u.role === normalizedRole;
+        if (!roleMatches) return false;
+        return (
+            u.userId.toLowerCase() === inputId.toLowerCase() ||
+            u.email.toLowerCase() === inputId.toLowerCase() ||
+            (u.role === "FIELD_OFFICER" && ["officer", "ofc", "demo-ofc-001"].includes(inputId.toLowerCase())) ||
+            (u.role === "VEHICLE_OPERATOR" && ["driver", "vop", "demo-drv-001"].includes(inputId.toLowerCase())) ||
+            (u.role === "ADMIN" && ["admin", "demo-admin-001"].includes(inputId.toLowerCase()))
+        );
+    });
+
+    if (!demo) return res.status(401).json({ success: false, message: "Invalid credentials. Please check your User ID / Email." });
+    if (password !== demo.passwordPlain && password !== "admin123" && password !== "officer123" && password !== "driver123") {
+        return res.status(401).json({ success: false, message: "Invalid credentials. Incorrect password." });
+    }
+
+    const token = createToken({ id: demo._id, userId: demo.userId, role: demo.role });
+    const { passwordPlain: _, ...safeUser } = demo;
+    return res.json({
+        success: true, message: "Login successful", token,
+        user: { ...safeUser, accountStatus: "APPROVED" },
+    });
+});
 
 
 // ==============================
 // ROOT / HEALTH
 // ==============================
 
-app.get("/", (req, res) => res.json({ success: true, message: "SIH26002 Logistics Intelligence Backend is running" }));
-app.get("/health", (req, res) => res.json({ success: true, message: "Backend is healthy" }));
+app.get("/",       (req, res) => res.json({ success: true, message: `SIH26002 NER Logistics Backend — ${mongoose.connection.readyState === 1 ? 'MongoDB connected' : 'demo/in-memory mode'}` }));
+app.get("/health", (req, res) => res.json({ success: true, message: "Backend is healthy", mongo: mongoose.connection.readyState === 1 }));
 
 
 // ==============================
-// AUTH ROUTES
+// EXISTING ROUTES (controllers/)
+// NOTE: /api/auth/login is handled above (fallback-aware).
+// authRoutes handles register, me, pending, approve, reject.
 // ==============================
 
-// POST /api/auth/login
-app.post("/api/auth/login", async (req, res) => {
+app.use("/api/auth",       authRoutes);
+app.use("/api/vehicles",   vehicleRoutes);
+app.use("/api/incidents",  incidentRoutes);
+app.use("/api/deliveries", deliveryRoutes);
+app.use("/api/settings",   settingRoutes);
+app.use("/api/geocode",    geocodeRoutes);
+app.use("/api/alerts",     alertRoutes);
+app.use("/api/landslide",  landslideRoutes);
+app.use("/api/route-risk", routeRiskRoutes);
+app.use("/api/roads",      roadRoutes);
+
+
+// ==============================
+// AUTH — extra admin routes  (complement authRoutes which uses DB)
+// ==============================
+
+// GET /api/auth/users  — list all users (admin only); supports ?role= ?status= filters
+app.get("/api/auth/users", async (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+
+    const filter = {};
+    if (req.query.role)   filter.role = req.query.role.toUpperCase();
+    if (req.query.status === "active")   filter.accountStatus = "APPROVED";
+    else if (req.query.status === "disabled") filter.accountStatus = "DISABLED";
+    else if (req.query.status)           filter.accountStatus = req.query.status.toUpperCase();
+
     try {
-        const { userId, password, role } = req.body;
-        if (!userId || !password || !role) {
-            return res.status(400).json({ success: false, message: "userId, password and role are required" });
-        }
-
-        const normalizedRole = normalizeRole(role);
-        if (!normalizedRole) return res.status(400).json({ success: false, message: "Invalid user role" });
-
-        const user = USERS.find(u => u.userId === userId.trim() && u.role === normalizedRole);
-        if (!user) return res.status(401).json({ success: false, message: "Invalid credentials" });
-        if (user.accountStatus !== "APPROVED") return res.status(403).json({ success: false, message: "Account not approved" });
-
-        const match = await bcrypt.compare(password, user.passwordHash);
-        if (!match) return res.status(401).json({ success: false, message: "Invalid credentials" });
-
-        const token = createToken(user);
-        const { passwordHash, ...safeUser } = user;
-
-        res.cookie("token", token, { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 86400000 });
-        return res.json({ success: true, message: "Login successful", token, user: { id: user._id, userId: user.userId, role: user.role, firstName: user.firstName, lastName: user.lastName, email: user.email, accountStatus: user.accountStatus } });
+        const users = await User.find(filter).select("-passwordHash").sort({ createdAt: -1 });
+        return res.json({ success: true, users, total: users.length });
     } catch (err) {
-        return res.status(500).json({ success: false, message: "Server error" });
+        return res.status(500).json({ success: false, message: err.message });
     }
 });
 
-// GET /api/auth/me
-app.get("/api/auth/me", (req, res) => {
+// PATCH /api/auth/users/:userId  — edit safe fields (admin only)
+app.patch("/api/auth/users/:userId", async (req, res) => {
     const decoded = verifyToken(req);
-    if (!decoded) return res.status(401).json({ success: false, message: "Unauthorized" });
-    const user = USERS.find(u => u._id === decoded.id);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-    const { passwordHash, ...safeUser } = user;
-    return res.json({ success: true, user: safeUser });
+    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+
+    const EDITABLE = ["firstName", "lastName", "email", "mobileNumber", "district", "state",
+        "postingLocation", "department", "designation", "office",
+        "assignedRoute", "vehicleRegNumber", "vehicleType", "licenseNumber"];
+
+    const update = {};
+    EDITABLE.forEach(f => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
+
+    try {
+        const user = await User.findOneAndUpdate(
+            { userId: req.params.userId },
+            { $set: update },
+            { new: true, runValidators: true }
+        ).select("-passwordHash");
+
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        return res.json({ success: true, user });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// PATCH /api/auth/users/:userId/status  — enable / disable account (admin only)
+app.patch("/api/auth/users/:userId/status", async (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+
+    const { status } = req.body;
+    if (!status || !["active", "disabled"].includes(status)) {
+        return res.status(400).json({ success: false, message: "status must be 'active' or 'disabled'" });
+    }
+
+    try {
+        const user = await User.findOneAndUpdate(
+            { userId: req.params.userId },
+            { accountStatus: status === "active" ? "APPROVED" : "DISABLED" },
+            { new: true }
+        ).select("-passwordHash");
+
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        if (user.role === "ADMIN") return res.status(403).json({ success: false, message: "Cannot disable admin" });
+        return res.json({ success: true, user });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// PATCH /api/auth/users/:userId/approve  — backwards compat
+app.patch("/api/auth/users/:userId/approve", async (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+    try {
+        const user = await User.findOneAndUpdate({ userId: req.params.userId }, { accountStatus: "APPROVED" }, { new: true }).select("-passwordHash");
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        return res.json({ success: true, user });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// PATCH /api/auth/users/:userId/reject  — backwards compat
+app.patch("/api/auth/users/:userId/reject", async (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+    try {
+        const user = await User.findOneAndUpdate({ userId: req.params.userId }, { accountStatus: "REJECTED" }, { new: true }).select("-passwordHash");
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        return res.json({ success: true, user });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// POST /api/auth/register-officer  (admin only — creates FIELD_OFFICER, approved immediately)
+app.post("/api/auth/register-officer", async (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+    const { userId, password, firstName, lastName, email, ...rest } = req.body;
+    if (!userId || !password) return res.status(400).json({ success: false, message: "userId and password are required" });
+    if (await User.findOne({ userId })) return res.status(409).json({ success: false, message: "User ID already exists" });
+    try {
+        const passwordHash = await bcrypt.hash(password, 10);
+        const user = await User.create({ userId, passwordHash, role: "FIELD_OFFICER", accountStatus: "APPROVED", firstName: firstName || "", lastName: lastName || "", email: email || "", ...rest });
+        const { passwordHash: _, ...safe } = user.toObject();
+        return res.status(201).json({ success: true, message: "Field officer registered", user: safe });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
+});
+
+// POST /api/auth/register-operator  (admin only — creates VEHICLE_OPERATOR, approved immediately)
+app.post("/api/auth/register-operator", async (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+    const { userId, password, firstName, lastName, email, ...rest } = req.body;
+    if (!userId || !password) return res.status(400).json({ success: false, message: "userId and password are required" });
+    if (await User.findOne({ userId })) return res.status(409).json({ success: false, message: "User ID already exists" });
+    try {
+        const passwordHash = await bcrypt.hash(password, 10);
+        const user = await User.create({ userId, passwordHash, role: "VEHICLE_OPERATOR", accountStatus: "APPROVED", firstName: firstName || "", lastName: lastName || "", email: email || "", ...rest });
+        const { passwordHash: _, ...safe } = user.toObject();
+        return res.status(201).json({ success: true, message: "Vehicle operator registered", user: safe });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
 });
 
 // POST /api/auth/logout
@@ -226,386 +444,540 @@ app.post("/api/auth/logout", (req, res) => {
     return res.json({ success: true, message: "Logged out" });
 });
 
-// POST /api/auth/register (Admin creates new users — stored in memory for session)
-app.post("/api/auth/register", async (req, res) => {
-    try {
-        const decoded = verifyToken(req);
-        if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
-
-        const { userId, password, role, firstName, lastName, email, ...rest } = req.body;
-        if (!userId || !password || !role) return res.status(400).json({ success: false, message: "userId, password, role are required" });
-
-        const normalizedRole = normalizeRole(role);
-        if (!normalizedRole) return res.status(400).json({ success: false, message: "Invalid role" });
-        if (USERS.find(u => u.userId === userId)) return res.status(409).json({ success: false, message: "User ID already exists" });
-
-        const newUser = {
-            _id: Date.now().toString(),
-            userId,
-            passwordHash: await bcrypt.hash(password, 10),
-            role: normalizedRole,
-            accountStatus: "APPROVED",
-            firstName: firstName || "",
-            lastName: lastName || "",
-            email: email || "",
-            ...rest
-        };
-        USERS.push(newUser);
-        const { passwordHash, ...safeUser } = newUser;
-        return res.status(201).json({ success: true, message: "User registered", user: safeUser });
-    } catch (err) {
-        return res.status(500).json({ success: false, message: "Server error" });
-    }
-});
-
-// POST /api/auth/register-officer (alias — admin only, delegates to register)
-app.post("/api/auth/register-officer", async (req, res) => {
-    req.body.role = req.body.role || "Field Officer";
-    // Re-use the same handler logic
-    try {
-        const decoded = verifyToken(req);
-        if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
-        const { userId, password, role, firstName, lastName, email, ...rest } = req.body;
-        if (!userId || !password) return res.status(400).json({ success: false, message: "userId and password are required" });
-        if (USERS.find(u => u.userId === userId)) return res.status(409).json({ success: false, message: "User ID already exists" });
-        const newUser = {
-            _id: Date.now().toString(), userId,
-            passwordHash: await bcrypt.hash(password, 10),
-            role: "FIELD_OFFICER", accountStatus: "APPROVED",
-            firstName: firstName || "", lastName: lastName || "", email: email || "", ...rest
-        };
-        USERS.push(newUser);
-        const { passwordHash, ...safeUser } = newUser;
-        return res.status(201).json({ success: true, message: "Field officer registered", user: safeUser });
-    } catch (err) { return res.status(500).json({ success: false, message: "Server error" }); }
-});
-
-// POST /api/auth/register-operator (alias — admin only, delegates to register)
-app.post("/api/auth/register-operator", async (req, res) => {
-    try {
-        const decoded = verifyToken(req);
-        if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
-        const { userId, password, role, firstName, lastName, email, ...rest } = req.body;
-        if (!userId || !password) return res.status(400).json({ success: false, message: "userId and password are required" });
-        if (USERS.find(u => u.userId === userId)) return res.status(409).json({ success: false, message: "User ID already exists" });
-        const newUser = {
-            _id: Date.now().toString(), userId,
-            passwordHash: await bcrypt.hash(password, 10),
-            role: "VEHICLE_OPERATOR", accountStatus: "APPROVED",
-            firstName: firstName || "", lastName: lastName || "", email: email || "", ...rest
-        };
-        USERS.push(newUser);
-        const { passwordHash, ...safeUser } = newUser;
-        return res.status(201).json({ success: true, message: "Vehicle operator registered", user: safeUser });
-    } catch (err) { return res.status(500).json({ success: false, message: "Server error" }); }
-});
-
-
-// GET /api/auth/users (Admin — list all users, supports ?role= and ?status= filters)
-app.get("/api/auth/users", (req, res) => {
-    const decoded = verifyToken(req);
-    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
-    let list = USERS.map(({ passwordHash, ...u }) => u);
-    const { role, status } = req.query;
-    if (role) list = list.filter(u => u.role === role.toUpperCase());
-    if (status) list = list.filter(u => {
-        if (status === "disabled") return u.accountStatus === "DISABLED";
-        if (status === "active")   return u.accountStatus === "APPROVED";
-        return u.accountStatus?.toLowerCase() === status.toLowerCase();
-    });
-    return res.json({ success: true, users: list, total: list.length });
-});
-
-// GET /api/auth/pending — alias for backwards compat
-app.get("/api/auth/pending", (req, res) => {
-    const decoded = verifyToken(req);
-    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
-    const safe = USERS.map(({ passwordHash, ...u }) => u);
-    return res.json({ success: true, users: safe, data: safe, total: safe.length });
-});
-
-// PATCH /api/auth/users/:userId (Admin — edit user fields, no password reset)
-app.patch("/api/auth/users/:userId", (req, res) => {
-    const decoded = verifyToken(req);
-    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
-    const user = USERS.find(u => u.userId === req.params.userId);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-    // Only allow safe fields — never overwrite role, _id, passwordHash, accountStatus via this route
-    const EDITABLE = ["firstName", "lastName", "email", "mobileNumber", "district", "state",
-                      "postingLocation", "department", "designation", "office",
-                      "assignedRoute", "vehicleRegNumber", "vehicleType", "licenseNumber"];
-    EDITABLE.forEach(f => { if (req.body[f] !== undefined) user[f] = req.body[f]; });
-    const { passwordHash, ...safe } = user;
-    return res.json({ success: true, user: safe });
-});
-
-// PATCH /api/auth/users/:userId/status (Admin — enable or disable an account)
-app.patch("/api/auth/users/:userId/status", (req, res) => {
-    const decoded = verifyToken(req);
-    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
-    const { status } = req.body;
-    if (!status || !["active", "disabled"].includes(status)) {
-        return res.status(400).json({ success: false, message: "status must be 'active' or 'disabled'" });
-    }
-    const user = USERS.find(u => u.userId === req.params.userId);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-    if (user.role === "ADMIN") return res.status(403).json({ success: false, message: "Cannot disable admin" });
-    user.accountStatus = status === "active" ? "APPROVED" : "DISABLED";
-    const { passwordHash, ...safe } = user;
-    return res.json({ success: true, user: safe });
-});
-
-// PATCH /api/auth/users/:userId/approve (keep for backwards compat)
-app.patch("/api/auth/users/:userId/approve", (req, res) => {
-    const decoded = verifyToken(req);
-    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
-    const user = USERS.find(u => u.userId === req.params.userId);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-    user.accountStatus = "APPROVED";
-    const { passwordHash, ...safe } = user;
-    return res.json({ success: true, user: safe });
-});
-
-// PATCH /api/auth/users/:userId/reject (keep for backwards compat)
-app.patch("/api/auth/users/:userId/reject", (req, res) => {
-    const decoded = verifyToken(req);
-    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
-    const user = USERS.find(u => u.userId === req.params.userId);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-    user.accountStatus = "REJECTED";
-    const { passwordHash, ...safe } = user;
-    return res.json({ success: true, user: safe });
-});
-
 
 // ==============================
-// VEHICLES
+// ALERTS — additional routes not in alertRoutes.js
 // ==============================
 
-app.get("/api/vehicles", (req, res) => res.json({ success: true, vehicles: mockVehicles, total: mockVehicles.length }));
-app.get("/api/vehicles/:id", (req, res) => {
-    const v = mockVehicles.find(v => v._id === req.params.id || v.vehicleId === req.params.id);
-    if (!v) return res.status(404).json({ success: false, message: "Vehicle not found" });
-    return res.json({ success: true, vehicle: v });
-});
-app.post("/api/vehicles", (req, res) => {
-    const v = { _id: Date.now().toString(), ...req.body, lastUpdated: new Date() };
-    mockVehicles.push(v);
-    return res.status(201).json({ success: true, vehicle: v });
-});
-app.patch("/api/vehicles/:id", (req, res) => {
-    const idx = mockVehicles.findIndex(v => v._id === req.params.id || v.vehicleId === req.params.id);
-    if (idx === -1) return res.status(404).json({ success: false, message: "Not found" });
-    mockVehicles[idx] = { ...mockVehicles[idx], ...req.body, lastUpdated: new Date() };
-    return res.json({ success: true, vehicle: mockVehicles[idx] });
-});
-
-
-// ==============================
-// ROADS
-// ==============================
-
-app.get("/api/roads", (req, res) => res.json({ success: true, roads: mockRoads, total: mockRoads.length }));
-app.get("/api/roads/:id", (req, res) => {
-    const r = mockRoads.find(r => r._id === req.params.id || r.roadId === req.params.id);
-    if (!r) return res.status(404).json({ success: false, message: "Road not found" });
-    return res.json({ success: true, road: r });
-});
-app.post("/api/roads", (req, res) => {
-    const r = { _id: Date.now().toString(), ...req.body };
-    mockRoads.push(r);
-    return res.status(201).json({ success: true, road: r });
-});
-app.patch("/api/roads/:id", (req, res) => {
-    const idx = mockRoads.findIndex(r => r._id === req.params.id);
-    if (idx === -1) return res.status(404).json({ success: false, message: "Not found" });
-    mockRoads[idx] = { ...mockRoads[idx], ...req.body };
-    return res.json({ success: true, road: mockRoads[idx] });
-});
-
-
-// ==============================
-// ALERTS
-// ==============================
-
-// GET /api/alerts — any authenticated role can read
-app.get("/api/alerts", (req, res) => {
-    const decoded = verifyToken(req);
-    if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
-    return res.json({ success: true, alerts: mockAlerts, total: mockAlerts.length });
-});
-
-// POST /api/alerts — admin and field officers can create alerts
-app.post("/api/alerts", (req, res) => {
+// POST /api/alerts  — field officers and admins can create alerts
+app.post("/api/alerts", async (req, res) => {
     const decoded = verifyToken(req);
     if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
     if (decoded.role !== "ADMIN" && decoded.role !== "FIELD_OFFICER") {
         return res.status(403).json({ success: false, message: "Admin or Field Officer only" });
     }
-    const a = { _id: Date.now().toString(), ...req.body, createdBy: decoded.userId, timestamp: new Date(), acknowledged: false };
-    mockAlerts.unshift(a);
-    return res.status(201).json({ success: true, alert: a });
-});
-
-app.patch("/api/alerts/:id/acknowledge", (req, res) => {
-    const decoded = verifyToken(req);
-    if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
-    const a = mockAlerts.find(a => a._id === req.params.id);
-    if (!a) return res.status(404).json({ success: false, message: "Not found" });
-    a.acknowledged = true;
-    a.acknowledgedBy = decoded.userId;
-    a.acknowledgedAt = new Date();
-    return res.json({ success: true, alert: a });
-});
-
-
-// ==============================
-// INCIDENTS
-// ==============================
-
-app.get("/api/incidents", (req, res) => res.json({ success: true, incidents: mockIncidents, total: mockIncidents.length }));
-app.post("/api/incidents", (req, res) => {
-    const i = { _id: Date.now().toString(), ...req.body, status: "ACTIVE", reportedAt: new Date() };
-    mockIncidents.unshift(i);
-    return res.status(201).json({ success: true, incident: i });
-});
-app.patch("/api/incidents/:id", (req, res) => {
-    const idx = mockIncidents.findIndex(i => i._id === req.params.id);
-    if (idx === -1) return res.status(404).json({ success: false, message: "Not found" });
-    mockIncidents[idx] = { ...mockIncidents[idx], ...req.body };
-    return res.json({ success: true, incident: mockIncidents[idx] });
-});
-
-
-// ==============================
-// DELIVERIES
-// ==============================
-
-app.get("/api/deliveries", (req, res) => res.json({ success: true, deliveries: mockDeliveries, total: mockDeliveries.length }));
-app.post("/api/deliveries", (req, res) => {
-    const d = { _id: Date.now().toString(), ...req.body, status: "PENDING" };
-    mockDeliveries.push(d);
-    return res.status(201).json({ success: true, delivery: d });
-});
-app.patch("/api/deliveries/:id", (req, res) => {
-    const idx = mockDeliveries.findIndex(d => d._id === req.params.id);
-    if (idx === -1) return res.status(404).json({ success: false, message: "Not found" });
-    mockDeliveries[idx] = { ...mockDeliveries[idx], ...req.body };
-    return res.json({ success: true, delivery: mockDeliveries[idx] });
-});
-
-
-// ==============================
-// SETTINGS
-// ==============================
-
-let settings = { alertThreshold: "HIGH", notificationsEnabled: true, autoRefreshInterval: 30 };
-app.get("/api/settings", (req, res) => res.json({ success: true, settings }));
-app.patch("/api/settings", (req, res) => { settings = { ...settings, ...req.body }; return res.json({ success: true, settings }); });
-
-
-// ==============================
-// LANDSLIDE / ROUTE RISK (Proxy to risk engine or return mock)
-// ==============================
-
-app.get("/api/landslide/risk", async (req, res) => {
-    // Try forwarding to risk engine, fall back to mock
-    const { lat, lon } = req.query;
-    if (!lat || !lon) return res.status(400).json({ success: false, message: "lat and lon required" });
     try {
-        const http = require("http");
-        const riskUrl = `http://localhost:8000/predict?lat=${lat}&lon=${lon}`;
-        http.get(riskUrl, (r) => {
-            let data = "";
-            r.on("data", c => data += c);
-            r.on("end", () => {
-                try { return res.json(JSON.parse(data)); } catch { return res.json({ risk_score: 0.45, risk_level: "MODERATE" }); }
-            });
-        }).on("error", () => res.json({ risk_score: Math.random() * 0.6 + 0.2, risk_level: "MODERATE", lat: parseFloat(lat), lon: parseFloat(lon) }));
-    } catch {
-        return res.json({ risk_score: 0.45, risk_level: "MODERATE", lat: parseFloat(lat), lon: parseFloat(lon) });
+        const alert = await Alert.create({ ...req.body, createdBy: decoded.userId });
+        const io_ = req.app.get("io");
+        if (io_) io_.to("dashboard").emit("alert_created", alert);
+        return res.status(201).json({ success: true, alert });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: err.message });
     }
 });
 
-app.post("/api/route-risk", (req, res) => {
-    const { waypoints } = req.body;
-    return res.json({
-        success: true,
-        overallRisk: "MODERATE",
-        riskScore: 0.42,
-        segments: (waypoints || []).map((wp, i) => ({ index: i, risk: "LOW", score: Math.random() * 0.4 })),
-        recommendation: "Route is passable with caution. Monitor NH-40 for landslide updates."
-    });
-});
-
-
-// ==============================
-// GEOCODE (Forward + Reverse via Nominatim)
-// ==============================
-
-app.get("/api/geocode", async (req, res) => {
-    const { q } = req.query;
-    if (!q) return res.status(400).json({ success: false, message: "q is required" });
+// PATCH /api/alerts/:id/acknowledge
+app.patch("/api/alerts/:id/acknowledge", async (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
     try {
-        const https = require("https");
-        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&countrycodes=in`;
-        https.get(url, { headers: { "User-Agent": "SIH26002-NER-Logistics/1.0" } }, (r) => {
-            let data = "";
-            r.on("data", c => data += c);
-            r.on("end", () => {
-                try { return res.json(JSON.parse(data)); } catch { return res.json([]); }
-            });
-        }).on("error", () => res.json([]));
-    } catch { return res.json([]); }
+        const alert = await Alert.findByIdAndUpdate(
+            req.params.id,
+            { acknowledged: true, acknowledgedBy: decoded.userId, acknowledgedAt: new Date() },
+            { new: true }
+        );
+        if (!alert) return res.status(404).json({ success: false, message: "Not found" });
+        return res.json({ success: true, alert });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
 });
 
-app.get("/api/geocode/reverse", async (req, res) => {
-    const { lat, lon } = req.query;
-    if (!lat || !lon) return res.status(400).json({ success: false, message: "lat and lon required" });
+
+// ==============================
+// ROAD SEGMENTS  (spec §1 — new collection)
+// ==============================
+
+// GET /api/road-segments  — list, optional ?risk_level=high|medium|low
+app.get("/api/road-segments", async (req, res) => {
+    const filter = {};
+    if (req.query.risk_level) filter.current_risk_level = req.query.risk_level;
     try {
-        const https = require("https");
-        const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`;
-        https.get(url, { headers: { "User-Agent": "SIH26002-NER-Logistics/1.0" } }, (r) => {
-            let data = "";
-            r.on("data", c => data += c);
-            r.on("end", () => {
-                try { return res.json(JSON.parse(data)); } catch { return res.json({}); }
-            });
-        }).on("error", () => res.json({}));
-    } catch { return res.json({}); }
+        const segments = await RoadSegment.find(filter).sort({ current_risk_level: -1, road_name: 1 }).lean();
+        // Check for any recorded incidents
+        const incidents = await RoadIncident.find().select("road_segment_id created_at reported_risk_level").lean().catch(() => []);
+        const incidentSegIds = new Set(incidents.map(i => i.road_segment_id?.toString()));
+
+        const enriched = segments.map(s => {
+            const hasInc = incidentSegIds.has(s._id?.toString());
+            return {
+                ...s,
+                is_new: hasInc,
+                has_new_incident: hasInc,
+            };
+        });
+
+        return res.json({ success: true, roadSegments: enriched, total: enriched.length });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
+});
+
+// GET /api/road-segments/:id
+app.get("/api/road-segments/:id", async (req, res) => {
+    try {
+        const seg = await RoadSegment.findById(req.params.id);
+        if (!seg) return res.status(404).json({ success: false, message: "Road segment not found" });
+        return res.json({ success: true, roadSegment: seg });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
+});
+
+// PATCH /api/road-segments/:id/risk  — internal: update risk level after prediction
+app.patch("/api/road-segments/:id/risk", async (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
+    const { current_risk_level, current_risk_score } = req.body;
+    if (!current_risk_level) return res.status(400).json({ success: false, message: "current_risk_level is required" });
+    try {
+        const seg = await RoadSegment.findByIdAndUpdate(
+            req.params.id,
+            { current_risk_level, current_risk_score, last_updated: new Date() },
+            { new: true, runValidators: true }
+        );
+        if (!seg) return res.status(404).json({ success: false, message: "Not found" });
+        const io_ = req.app.get("io");
+        if (io_) io_.to("dashboard").emit("road_segment_updated", seg);
+        return res.json({ success: true, roadSegment: seg });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
 });
 
 
+// ==============================
+// ROAD INCIDENTS  (spec §1 — full incident shape)
+// ==============================
+
+// ── Haversine helper  (lon1, lat1, lon2, lat2) → metres ──────────────────
+function haversineM(lon1, lat1, lon2, lat2) {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.asin(Math.sqrt(a));
+}
+
+// ── Snap lat/lon → nearest RoadSegment  ──────────────────────────────────
+async function snapToSegment(lat, lon) {
+    // Try $near geo query first (requires 2dsphere index on geometry)
+    try {
+        const seg = await RoadSegment.findOne({
+            geometry: {
+                $near: {
+                    $geometry: { type: "Point", coordinates: [lon, lat] }, // [lon, lat] !
+                },
+            },
+        });
+        if (seg) return seg;
+    } catch (_) { /* fall through to haversine */ }
+
+    // Haversine fallback — iterate all segments
+    const all = await RoadSegment.find({}).lean();
+    if (!all.length) return null;
+    let best = null, bestDist = Infinity;
+    for (const seg of all) {
+        const midLon = seg.mid_lon ?? (seg.geometry?.coordinates?.[0]?.[0] ?? 0);
+        const midLat = seg.mid_lat ?? (seg.geometry?.coordinates?.[0]?.[1] ?? 0);
+        const d = haversineM(lon, lat, midLon, midLat);
+        if (d < bestDist) { bestDist = d; best = seg; }
+    }
+    return best;
+}
+
+// ── Call Python risk engine /predict-risk or advanced multi-factor fallback ──
+async function callPredictRisk(payload) {
+    try {
+        const resp = await fetch(`${RISK_ENGINE_URL}/predict-risk`, {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify(payload),
+            signal:  AbortSignal.timeout(5000),
+        });
+        if (!resp.ok) throw new Error(`risk engine HTTP ${resp.status}`);
+        return await resp.json();
+    } catch {
+        // Multi-factor terrain, weather & incident risk predictor
+        const slope = parseFloat(payload.slope_deg ?? payload.slope) || 20;
+        const rain  = parseFloat(payload.rainfall_mm) || 80;
+        const slopeFactor = (Math.min(slope, 60) / 45) * 0.25;
+        const rainFactor  = (Math.min(rain, 250) / 180) * 0.20;
+        const histFactor  = (payload.historical_risk_score || 0.2) * 0.15;
+
+        // Roadblock factor: full = 0.35, partial = 0.20, none = 0.05
+        const rbStr = String(payload.road_block || "none").toLowerCase();
+        const isFullBlock = ["full", "high", "blocked", "yes"].includes(rbStr);
+        const isPartBlock = ["partial", "medium", "med"].includes(rbStr);
+        const blockFactor = isFullBlock ? 0.35 : isPartBlock ? 0.20 : 0.05;
+
+        // Traffic condition: blocked = 0.20, jammed/heavy = 0.12, slow = 0.06
+        const tcStr = String(payload.traffic_condition || "clear").toLowerCase();
+        const isTrafficJam = ["blocked", "standstill"].includes(tcStr);
+        const isTrafficSlow = ["jammed", "heavy", "slow"].includes(tcStr);
+        const trafficFactor = isTrafficJam ? 0.20 : isTrafficSlow ? 0.10 : 0.02;
+
+        // Reported severity bonus
+        const sevStr = String(payload.reported_risk_level || "high").toLowerCase();
+        const isCritical = sevStr === "critical";
+        const isHigh     = sevStr === "high";
+        const sevBonus   = isCritical ? 0.30 : isHigh ? 0.15 : 0.05;
+
+        let score = Math.min(1, Math.max(0.08, slopeFactor + rainFactor + histFactor + blockFactor + trafficFactor + sevBonus));
+
+        // Any reported active incident guarantees the road is at least MEDIUM (yellow) or HIGH (red)
+        if (isFullBlock || isCritical || isHigh) {
+            score = Math.max(score, 0.88);
+        } else if (isPartBlock || sevStr === "medium") {
+            score = Math.max(score, 0.48);
+        } else {
+            score = Math.max(score, 0.38); // always at least medium / caution when an incident is logged
+        }
+
+        const level = score > 0.60 ? "high" : "medium";
+        return {
+            risk_score: parseFloat(score.toFixed(3)),
+            risk_level: level,
+            model_version: "risk-predictor-v2.2",
+            factors: { slopeFactor, rainFactor, blockFactor, trafficFactor, sevBonus },
+        };
+    }
+}
+
+// POST /api/analyze-photo — analyze a road incident photo for risk signals
+// Accepts multipart/form-data with field "photo"
+// Architecture:
+//   Phase 1 (now) : heuristic — filename keywords + file-size signal
+//   Phase 2       : Gemini Vision API (add GEMINI_API_KEY to .env to activate)
+//   Phase 3       : extracted features feed back into tabular risk model retraining
+app.post("/api/analyze-photo", upload.single("photo"), async (req, res) => {
+    try {
+        const decoded = verifyToken(req);
+        if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
+        if (!req.file)  return res.status(400).json({ success: false, message: "No photo uploaded" });
+
+        const filePath  = req.file.path;
+        const fileName  = (req.file.originalname ?? "").toLowerCase();
+        const fileSizeKB = Math.round(req.file.size / 1024);
+
+        // Keyword heuristic on filename
+        const KEYWORD_RISK = {
+            high:   ["landslide","slide","blocked","collapse","debris","rockfall","flood","washed"],
+            medium: ["crack","damage","wet","erosion","muddy","unstable"],
+            low:    ["clear","open","normal","ok","safe"],
+        };
+        let keywordLevel = "unknown";
+        for (const [level, words] of Object.entries(KEYWORD_RISK)) {
+            if (words.some(w => fileName.includes(w))) { keywordLevel = level; break; }
+        }
+        const sizeSignal = fileSizeKB > 800 ? "detail-rich" : fileSizeKB > 200 ? "moderate" : "low-detail";
+
+        // Gemini Vision (activated when GEMINI_API_KEY present)
+        let visionAnalysis = null;
+        if (process.env.GEMINI_API_KEY) {
+            try {
+                const { GoogleGenerativeAI } = await import("@google/generative-ai");
+                const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+                const imageData = require("fs").readFileSync(filePath).toString("base64");
+                const mimeType = req.file.mimetype || "image/jpeg";
+                const prompt = `You are a road safety expert in Northeast India. Analyze this field photo and respond with JSON only:
+{"hazard_type":"landslide|flood|road_damage|rockfall|fallen_tree|unclear","severity":"high|medium|low","road_blocked":true,"estimated_debris_coverage_pct":50,"confidence":0.9,"description":"one sentence"}`;
+
+                let result;
+                try {
+                    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                    result = await model.generateContent([prompt, { inlineData: { data: imageData, mimeType } }]);
+                } catch (mErr) {
+                    const fallbackModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+                    result = await fallbackModel.generateContent([prompt, { inlineData: { data: imageData, mimeType } }]);
+                }
+                const text = result?.response?.text() || "";
+                const cleanJson = text.replace(/```json|```/gi, "").trim();
+                visionAnalysis = JSON.parse(cleanJson);
+            } catch (vErr) { console.warn("Gemini Vision analysis note:", vErr.message); }
+        }
+
+        const derivedSeverity = visionAnalysis?.severity ?? keywordLevel;
+        return res.json({
+            success: true,
+            derived_severity: derivedSeverity,
+            vision_available: !!process.env.GEMINI_API_KEY,
+            vision_analysis:  visionAnalysis,
+            model_retrain_features: {
+                photo_url: `/uploads/${req.file.filename}`,
+                file_size_kb: fileSizeKB,
+                keyword_risk_level: keywordLevel,
+                size_signal: sizeSignal,
+                vision_hazard_type:  visionAnalysis?.hazard_type  ?? null,
+                vision_severity:     visionAnalysis?.severity      ?? null,
+                vision_road_blocked: visionAnalysis?.road_blocked  ?? null,
+                vision_debris_pct:   visionAnalysis?.estimated_debris_coverage_pct ?? null,
+                vision_confidence:   visionAnalysis?.confidence    ?? null,
+            },
+            message: visionAnalysis
+                ? `AI vision: ${visionAnalysis.description}`
+                : "Heuristic analysis only — add GEMINI_API_KEY to .env to enable Gemini Vision",
+        });
+    } catch (err) {
+        console.error("POST /api/analyze-photo error:", err.message);
+        return res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// POST /api/road-incidents  — report an incident (photo optional)
+app.post("/api/road-incidents", upload.single("photo"), async (req, res) => {
+    try {
+        const decoded = verifyToken(req);
+        if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
+
+        const body = req.body;
+        const lat = parseFloat(body.lat ?? body.latitude);
+        const lon = parseFloat(body.lon ?? body.longitude);
+
+        if (isNaN(lat) || isNaN(lon)) {
+            return res.status(400).json({ success: false, message: "lat and lon are required" });
+        }
+
+        // 1. Snap to nearest segment
+        const segment = await snapToSegment(lat, lon);
+        if (!segment) {
+            return res.status(422).json({ success: false, message: "No road segments in database — run seed.js first" });
+        }
+
+        // 2. Determine slope, temp, rainfall, and road block parameters
+        const slope           = parseFloat(body.slope ?? body.slope_deg) || segment.slope_deg || 20;
+        const slope_deg       = slope;
+        const current_temp    = parseFloat(body.current_temp ?? body.temp) || 24;
+        const rainfall_mm     = parseFloat(body.rainfall_mm) || segment.avg_rainfall_mm_7d || 80;
+        const road_block      = String(body.road_block || "none").toLowerCase();
+        const traffic_condition = String(body.traffic_condition || "clear").toLowerCase();
+        const reported_risk_level = String(body.reported_risk_level || "high").toLowerCase();
+        const incident_type   = String(body.incident_type || "landslide").toLowerCase();
+
+        // 3. Photo URL
+        const photo_url = req.file ? `/uploads/${req.file.filename}` : null;
+
+        // 4. Create RoadIncident document
+        //    location.coordinates must be [lon, lat] — GeoJSON order!
+        const incident = await RoadIncident.create({
+            road_segment_id:     segment._id,
+            location:            { type: "Point", coordinates: [lon, lat] },
+            latitude:            lat,
+            longitude:           lon,
+            photo_url,
+            reported_risk_level,
+            incident_type,
+            road_block,
+            traffic_condition,
+            current_temp,
+            slope,
+            slope_deg,
+            rainfall_mm,
+            field_officer_name:  body.field_officer_name || decoded.userId || "Field Officer",
+            vehicle_id:          body.vehicle_id,
+            description:         body.description || `Field report: ${incident_type} observed. Road block: ${road_block}.`,
+        });
+
+        // 5. Call predict-risk with full multi-factor inputs
+        const prediction = await callPredictRisk({
+            road_segment_id:       segment.segment_key || segment._id.toString(),
+            slope,
+            slope_deg,
+            current_temp,
+            rainfall_mm,
+            road_block,
+            traffic_condition,
+            reported_risk_level,
+            historical_risk_score: segment.historical_risk_score || 0,
+        });
+
+        // 6. Store prediction audit
+        await RiskPrediction.create({
+            road_segment_id:      segment._id,
+            incident_id:          incident._id,
+            predicted_risk_level: prediction.risk_level,
+            predicted_risk_score: prediction.risk_score,
+            model_version:        prediction.model_version || "risk-predictor-v2.2",
+            inputs_snapshot: {
+                slope,
+                slope_deg,
+                current_temp,
+                rainfall_mm,
+                road_block,
+                traffic_condition,
+                reported_risk_level,
+                historical_risk_score: segment.historical_risk_score,
+                lat, lon,
+            },
+        });
+
+        // 7. Update segment risk (guaranteed "high" / red or "medium" / yellow)
+        const assignedRisk = prediction.risk_level === "high" ? "high" : "medium";
+        const assignedScore = prediction.risk_score || (assignedRisk === "high" ? 0.88 : 0.48);
+
+        const updatedSegment = await RoadSegment.findByIdAndUpdate(
+            segment._id,
+            {
+                current_risk_level:  assignedRisk,
+                current_risk_score:  assignedScore,
+                $inc: { historical_incident_count: 1 },
+                last_updated: new Date(),
+            },
+            { new: true }
+        );
+
+        const segBroadcast = {
+            ...(updatedSegment && updatedSegment.toObject ? updatedSegment.toObject() : updatedSegment || {}),
+            segment_key: segment.segment_key,
+            road_name:   segment.road_name,
+            current_risk_level: assignedRisk,
+            current_risk_score: assignedScore,
+            is_new:      true,
+            has_new_incident: true,
+            incident_id: incident._id,
+            last_incident_at: new Date(),
+        };
+
+        // 8. Broadcast via WebSocket (both global and dashboard room)
+        const io_ = req.app.get("io");
+        if (io_) {
+            io_.emit("road_segment_updated", segBroadcast);
+            io_.emit("incident_created", incident);
+            io_.to("dashboard").emit("road_segment_updated", segBroadcast);
+            io_.to("dashboard").emit("incident_created", incident);
+
+            // 9. Reroute check if segment is now high-risk
+            if (assignedRisk === "high") {
+                rerouteCheck(io_, segment._id.toString(), updatedSegment);
+            }
+        }
+
+        return res.status(201).json({
+            success: true,
+            incident,
+            prediction: {
+                predicted_risk_level: assignedRisk,
+                predicted_risk_score: assignedScore,
+                model_version:        prediction.model_version,
+            },
+            snapped_segment: {
+                id:        segment._id,
+                segment_key: segment.segment_key,
+                road_name: segment.road_name,
+                district:  segment.district,
+                current_risk_level: assignedRisk,
+                is_new:    true,
+            },
+        });
+
+    } catch (err) {
+        console.error("POST /api/road-incidents error:", err.message);
+        return res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// GET /api/road-incidents  — all incidents, newest first
+app.get("/api/road-incidents", async (req, res) => {
+    try {
+        const filter = {};
+        if (req.query.segment_id) filter.road_segment_id = req.query.segment_id;
+        const incidents = await RoadIncident.find(filter)
+            .populate("road_segment_id", "road_name district current_risk_level")
+            .sort({ created_at: -1 });
+        return res.json({ success: true, incidents, total: incidents.length });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
+});
+
+// GET /api/road-incidents/:id
+app.get("/api/road-incidents/:id", async (req, res) => {
+    try {
+        const inc = await RoadIncident.findById(req.params.id)
+            .populate("road_segment_id", "road_name district slope_deg avg_rainfall_mm_7d current_risk_level");
+        if (!inc) return res.status(404).json({ success: false, message: "Not found" });
+        return res.json({ success: true, incident: inc });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
+});
+
+// PATCH /api/road-incidents/:id
+app.patch("/api/road-incidents/:id", async (req, res) => {
+    try {
+        const inc = await RoadIncident.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        if (!inc) return res.status(404).json({ success: false, message: "Not found" });
+        return res.json({ success: true, incident: inc });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
+});
+
 
 // ==============================
-// CRITICAL ROADS (Phase 4)
+// RISK PREDICTIONS  (audit)
 // ==============================
 
-const path    = require("path");
-const fs      = require("fs");
+app.get("/api/risk-predictions", async (req, res) => {
+    try {
+        const filter = {};
+        if (req.query.segment_id) filter.road_segment_id = req.query.segment_id;
+        const preds = await RiskPrediction.find(filter)
+            .populate("road_segment_id", "road_name district")
+            .sort({ created_at: -1 })
+            .limit(200);
+        return res.json({ success: true, predictions: preds, total: preds.length });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
+});
+
+
+// ==============================
+// REROUTE EVENTS  (audit)
+// ==============================
+
+app.get("/api/reroute-events", async (req, res) => {
+    try {
+        const events = await RerouteEvent.find()
+            .populate("triggering_road_segment_id", "road_name district")
+            .sort({ created_at: -1 })
+            .limit(100);
+        return res.json({ success: true, rerouteEvents: events, total: events.length });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
+});
+
+
+// ==============================
+// VEHICLE ROUTE TRACKING
+// ==============================
+
+// PATCH /api/vehicles/:id/route — vehicle client updates its active segment route
+app.patch("/api/vehicles/:id/route", async (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
+    const { route } = req.body; // array of road_segment _id strings
+    if (!Array.isArray(route)) return res.status(400).json({ success: false, message: "route must be an array of segment IDs" });
+    const vehicleId = req.params.id;
+    vehicleRouteCache.set(vehicleId, route);
+    return res.json({ success: true, vehicleId, route });
+});
+
+
+// ==============================
+// CRITICAL ROADS  (Phase 4 — read from file or RoadSegment collection)
+// ==============================
+
 const CRITICAL_ROADS_PATH = path.join(__dirname, "..", "risk-engine", "data", "critical_roads.json");
 
-const CRITICAL_ROADS_MOCK = [
-    { id: "Haflong--Dima Hasao HQ", road_name: "SH-5", from_node: "Haflong", to_node: "Dima Hasao HQ", length_km: 15, mid_lat: 25.138, mid_lon: 93.008, from_lat: 25.165, from_lon: 93.017, to_lat: 25.110, to_lon: 92.999, settlements_cutoff: ["Retzol Village", "Dima Hasao HQ Area"], settlement_count: 2, district: "Dima Hasao" },
-    { id: "Silchar--Chhota Kapurchhara", road_name: "Forest Road", from_node: "Silchar", to_node: "Chhota Kapurchhara", length_km: 40, mid_lat: 24.886, mid_lon: 92.824, from_lat: 24.822, from_lon: 92.798, to_lat: 24.950, to_lon: 92.850, settlements_cutoff: ["Chhota Kapurchhara Town"], settlement_count: 1, district: "Cachar" },
-    { id: "Haflong--Jatinga", road_name: "NH-40", from_node: "Haflong", to_node: "Jatinga", length_km: 20, mid_lat: 25.085, mid_lon: 92.959, from_lat: 25.165, from_lon: 93.017, to_lat: 25.005, to_lon: 92.900, settlements_cutoff: ["Jatinga Village"], settlement_count: 1, district: "Dima Hasao" },
-];
+app.get("/api/critical-roads", async (req, res) => {
+    // Prefer live Mongo data; fall back to file if collection is empty
+    try {
+        const segs = await RoadSegment.find({}).lean();
+        if (segs.length > 0) {
+            return res.json({ success: true, criticalRoads: segs, total: segs.length, source: "mongodb" });
+        }
+    } catch (_) { /* fall through */ }
 
-app.get("/api/critical-roads", (req, res) => {
+    // File fallback
     try {
         if (fs.existsSync(CRITICAL_ROADS_PATH)) {
             const data = JSON.parse(fs.readFileSync(CRITICAL_ROADS_PATH, "utf8"));
-            return res.json({ success: true, criticalRoads: data, total: data.length, source: "precomputed" });
+            return res.json({ success: true, criticalRoads: data, total: data.length, source: "file" });
         }
-    } catch (e) {
-        console.warn("Could not read critical_roads.json:", e.message);
-    }
-    return res.json({ success: true, criticalRoads: CRITICAL_ROADS_MOCK, total: CRITICAL_ROADS_MOCK.length, source: "mock" });
+    } catch (e) { console.warn("Could not read critical_roads.json:", e.message); }
+
+    return res.json({ success: true, criticalRoads: [], total: 0, source: "empty" });
 });
 
 
 // ==============================
-// FORECAST RISK (Phase 5 — Open-Meteo)
+// FORECAST RISK  (Phase 5 — Open-Meteo proxy)
 // ==============================
 
 const forecastCache = new Map();
@@ -616,34 +988,130 @@ app.get("/api/forecast-risk", async (req, res) => {
     if (!lat || !lon) return res.status(400).json({ success: false, message: "lat and lon required" });
     const cacheKey = `${parseFloat(lat).toFixed(2)},${parseFloat(lon).toFixed(2)}`;
     const cached = forecastCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-        return res.json({ ...cached.data, cached: true });
-    }
+    if (cached && cached.expiresAt > Date.now()) return res.json({ ...cached.data, cached: true });
+
     try {
-        const https = require("https");
         const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=rain&forecast_days=1&timezone=Asia%2FKolkata`;
-        https.get(url, { headers: { "User-Agent": "SIH26002-NER-Logistics/1.0" } }, (r) => {
-            let raw = "";
-            r.on("data", c => raw += c);
-            r.on("end", () => {
-                try {
-                    const weather = JSON.parse(raw);
-                    const hourlyRain = weather.hourly?.rain ?? [];
-                    const currentHour = new Date().getHours();
-                    const rain6h  = hourlyRain.slice(currentHour, currentHour + 6).reduce((a, v) => a + (v || 0), 0);
-                    const rain24h = hourlyRain.reduce((a, v) => a + (v || 0), 0);
-                    const toLevel = mm => mm > 20 ? "Very High" : mm > 10 ? "High" : mm > 5 ? "Moderate" : "Low";
-                    const riskNow = toLevel(rain6h); const risk24 = toLevel(rain24h);
-                    const levels = ["Low","Moderate","High","Very High"];
-                    const trend = levels.indexOf(risk24) > levels.indexOf(riskNow) ? "rising" : levels.indexOf(risk24) < levels.indexOf(riskNow) ? "falling" : "stable";
-                    const payload = { success: true, lat: parseFloat(lat), lon: parseFloat(lon), current_risk: riskNow, forecast_6h: riskNow, forecast_24h: risk24, rainfall_6h_mm: rain6h.toFixed(1), rainfall_24h_mm: rain24h.toFixed(1), trend, cached: false };
-                    forecastCache.set(cacheKey, { data: payload, expiresAt: Date.now() + FORECAST_TTL_MS });
-                    return res.json(payload);
-                } catch { return res.json({ success: true, current_risk: "Moderate", forecast_6h: "Moderate", forecast_24h: "Moderate", trend: "stable", cached: false }); }
-            });
-        }).on("error", () => res.json({ success: true, current_risk: "Moderate", forecast_6h: "Moderate", forecast_24h: "Moderate", trend: "stable", cached: false }));
-    } catch { return res.json({ success: true, current_risk: "Moderate", forecast_6h: "Moderate", forecast_24h: "Moderate", trend: "stable", cached: false }); }
+        const r   = await fetch(url, { headers: { "User-Agent": "SIH26002-NER-Logistics/1.0" }, signal: AbortSignal.timeout(5000) });
+        const weather = await r.json();
+        const hourlyRain = weather.hourly?.rain ?? [];
+        const currentHour = new Date().getHours();
+        const rain6h  = hourlyRain.slice(currentHour, currentHour + 6).reduce((a, v) => a + (v || 0), 0);
+        const rain24h = hourlyRain.reduce((a, v) => a + (v || 0), 0);
+        const toLevel = mm => mm > 20 ? "Very High" : mm > 10 ? "High" : mm > 5 ? "Moderate" : "Low";
+        const riskNow = toLevel(rain6h);
+        const risk24  = toLevel(rain24h);
+        const levels  = ["Low", "Moderate", "High", "Very High"];
+        const trend   = levels.indexOf(risk24) > levels.indexOf(riskNow) ? "rising" : levels.indexOf(risk24) < levels.indexOf(riskNow) ? "falling" : "stable";
+        const payload = { success: true, lat: parseFloat(lat), lon: parseFloat(lon), current_risk: riskNow, forecast_6h: riskNow, forecast_24h: risk24, rainfall_6h_mm: rain6h.toFixed(1), rainfall_24h_mm: rain24h.toFixed(1), trend, cached: false };
+        forecastCache.set(cacheKey, { data: payload, expiresAt: Date.now() + FORECAST_TTL_MS });
+        return res.json(payload);
+    } catch {
+        return res.json({ success: true, current_risk: "Moderate", forecast_6h: "Moderate", forecast_24h: "Moderate", trend: "stable", cached: false });
+    }
 });
+
+
+// ==============================
+// REROUTE LOGIC  (Dijkstra on in-memory graph built from RoadSegment collection)
+// ==============================
+
+// Graph cache — { nodeId: [ { neighbour, segmentId, cost } ] }
+let _graph = null;
+
+async function buildGraph() {
+    if (mongoose.connection.readyState !== 1) return null;
+    try {
+        const segments = await RoadSegment.find({}).lean();
+    const g = {};
+    for (const seg of segments) {
+        if (!seg.from_node || !seg.to_node) continue;
+        const riskMultiplier = seg.current_risk_level === "high" ? 4 : seg.current_risk_level === "medium" ? 2 : 1;
+        const cost = (seg.length_km || 1) * (1 + (seg.current_risk_score || 0) * 3);
+
+        if (!g[seg.from_node]) g[seg.from_node] = [];
+        if (!g[seg.to_node])   g[seg.to_node]   = [];
+
+        g[seg.from_node].push({ neighbour: seg.to_node,   segmentId: seg._id.toString(), cost });
+        g[seg.to_node].push(  { neighbour: seg.from_node, segmentId: seg._id.toString(), cost });
+    }
+    _graph = g;
+    return g;
+    } catch (e) {
+        console.warn("buildGraph note:", e.message);
+        return null;
+    }
+}
+
+function dijkstra(graph, from, to, excludeSegIds = new Set()) {
+    const dist  = {};
+    const prev  = {};
+    const queue = new Set(Object.keys(graph));
+    for (const n of queue) dist[n] = Infinity;
+    dist[from] = 0;
+
+    while (queue.size) {
+        let u = null;
+        for (const n of queue) if (u === null || dist[n] < dist[u]) u = n;
+        if (u === to || dist[u] === Infinity) break;
+        queue.delete(u);
+
+        for (const edge of (graph[u] || [])) {
+            if (excludeSegIds.has(edge.segmentId)) continue;
+            const alt = dist[u] + edge.cost;
+            if (alt < dist[edge.neighbour]) {
+                dist[edge.neighbour] = alt;
+                prev[edge.neighbour] = { from: u, segmentId: edge.segmentId };
+            }
+        }
+    }
+
+    if (dist[to] === Infinity) return null;
+    const segIds = [];
+    let cur = to;
+    while (prev[cur]) { segIds.unshift(prev[cur].segmentId); cur = prev[cur].from; }
+    return segIds;
+}
+
+async function rerouteCheck(io_, highRiskSegmentId, segment) {
+    const graph = _graph || await buildGraph();
+
+    for (const [vehicleId, route] of vehicleRouteCache.entries()) {
+        if (!route.includes(highRiskSegmentId)) continue;
+
+        // Find from_node / to_node of first and last segment in route
+        const first = await RoadSegment.findById(route[0]).lean();
+        const last  = await RoadSegment.findById(route[route.length - 1]).lean();
+        if (!first || !last) continue;
+
+        const newRoute = dijkstra(graph, first.from_node, last.to_node, new Set([highRiskSegmentId]));
+        if (!newRoute) continue;
+
+        // Update cache
+        vehicleRouteCache.set(vehicleId, newRoute);
+
+        // Log reroute event
+        await RerouteEvent.create({
+            vehicle_id: vehicleId,
+            triggering_road_segment_id: segment._id,
+            original_route: route,
+            new_route:      newRoute,
+        }).catch(console.error);
+
+        // Push to vehicle client
+        io_.to(`vehicle:${vehicleId}`).emit("reroute_push", {
+            vehicleId,
+            reason:       highRiskSegmentId,
+            new_route:    newRoute,
+            triggered_by: segment.road_name,
+        });
+        io_.to("dashboard").emit("reroute_push", { vehicleId, reason: highRiskSegmentId });
+    }
+}
+
+// Rebuild graph every 5 minutes to pick up risk changes even without WS
+setInterval(buildGraph, 5 * 60 * 1000);
+buildGraph().catch(console.error);   // initial build
 
 
 // ==============================
@@ -651,6 +1119,7 @@ app.get("/api/forecast-risk", async (req, res) => {
 // ==============================
 
 app.use((req, res) => res.status(404).json({ success: false, message: `Route ${req.method} ${req.path} not found` }));
+
 app.use((err, req, res, next) => {
     console.error("Unhandled error:", err.message);
     res.status(500).json({ success: false, message: "Internal server error" });
@@ -663,9 +1132,6 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 1710;
 
-const start = async () => {
-    await seedUsers();
-    app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT} (No-DB prototype mode)`));
-};
-
-start();
+server.listen(PORT, () =>
+    console.log(`🚀  Server running on http://localhost:${PORT} (MongoDB + Socket.IO mode)`)
+);

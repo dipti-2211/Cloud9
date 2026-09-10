@@ -18,13 +18,15 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
   Navigation, Search, Loader, MapPin, ChevronDown, ChevronUp,
-  ArrowRight, Play, Square, SkipForward, Crosshair
+  ArrowRight, Play, Square, SkipForward, Crosshair, AlertTriangle, ShieldCheck
 } from 'lucide-react';
-import { geocodePlace, getRouteRisk } from '../services/api';
+import { geocodePlace, getRouteRisk, BASE_URL } from '../services/api';
 import toast from 'react-hot-toast';
 import { useUserLocation } from '../hooks/useUserLocation';
+import { useSocket } from '../hooks/useSocket';
 import { PageHeader } from '../components/common/PageHeader';
 import rawDemoLocations from '../data/demoLocations.json';
+import { RiskPolyline, getRouteCrossedSegments, NER_ROAD_SEGMENTS } from '../components/map/RiskPolyline';
 
 // ---------------------------------------------------------------------------
 // Real demo locations from the trained model — sourced from landslide_points.csv
@@ -166,11 +168,117 @@ const scoreRoute = (results) => {
 };
 
 // ---------------------------------------------------------------------------
-// Leaflet marker icons
+// Leaflet marker icons & helpers
 // ---------------------------------------------------------------------------
 const userIcon = L.divIcon({ className: 'user-location-marker', iconSize: [22, 22], iconAnchor: [11, 11] });
 const fromIcon = L.divIcon({ className: 'risk-marker risk-marker-low',  iconSize: [14, 14], iconAnchor: [7, 7] });
 const toIcon   = L.divIcon({ className: 'risk-marker risk-marker-high', iconSize: [14, 14], iconAnchor: [7, 7] });
+
+// Hazard hotspot marker icon
+const createHazardPin = (riskLevel, isCrossed = false, isNew = false) => {
+  const isHigh = riskLevel === 'high' || riskLevel === 'critical';
+  const isMed  = riskLevel === 'medium' || riskLevel === 'moderate';
+  const color  = isHigh ? '#dc2626' : isMed ? '#f59e0b' : '#22c55e';
+  const symbol = isNew ? '🚨' : isHigh ? '⚠' : isMed ? '▲' : '✓';
+  const size   = isCrossed ? 32 : isNew ? 28 : 24;
+  const anchor = Math.round(size / 2);
+
+  return L.divIcon({
+    className: '',
+    iconSize: [size, size],
+    iconAnchor: [anchor, anchor],
+    html: `<div style="
+      width: ${size}px; height: ${size}px;
+      border-radius: 50%;
+      background: ${color};
+      color: #ffffff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: ${isCrossed ? '14px' : isNew ? '13px' : '11px'}; font-weight: 900;
+      box-shadow: 0 0 14px ${isHigh || isNew ? 'rgba(220,38,38,0.9)' : 'rgba(245,158,11,0.7)'};
+      border: ${isCrossed ? '3px solid #ffffff' : isNew ? '2.5px solid #fef08a' : '2px solid #ffffff'};
+      cursor: pointer;
+      ${isHigh || isCrossed || isNew ? 'animation: pulse-danger 1.8s infinite;' : ''}
+    ">${symbol}</div>`,
+  });
+};
+
+// Segment midpoint road name badge with prominent (NEW) marker
+const createSegBadge = (seg, isCrossed = false, isNew = false) => {
+  const isHigh = seg.risk_level === 'high';
+  const isMed  = seg.risk_level === 'medium';
+  const bg = isHigh ? '#dc2626' : isMed ? '#d97706' : '#16a34a';
+  const prefix = isHigh ? '🔴 ' : isMed ? '🟡 ' : '🟢 ';
+  const newTag = isNew
+    ? `<span style="
+        background: #ffffff;
+        color: ${isHigh ? '#dc2626' : '#b45309'};
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-size: 9.5px;
+        font-weight: 900;
+        margin-left: 5px;
+        letter-spacing: 0.5px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+        display: inline-flex;
+        align-items: center;
+      ">(NEW)</span>`
+    : '';
+
+  return L.divIcon({
+    className: '',
+    iconSize: [1, 1],
+    iconAnchor: [0, 0],
+    html: `<div style="
+      background: ${bg};
+      color: #fff;
+      padding: 3px 8px;
+      border-radius: 10px;
+      font-size: 10.5px;
+      font-weight: 700;
+      white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      border: ${isCrossed ? '2.5px solid #fff' : isNew ? '2px solid #fef08a' : '1px solid rgba(255,255,255,0.7)'};
+      pointer-events: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      ${isNew ? 'animation: pulse-danger 1.8s infinite;' : ''}
+    ">${prefix}${seg.road_name}${newTag}${isCrossed ? ' [ON ROUTE]' : ''}</div>`,
+  });
+};
+
+// Live incident pin icon
+const incidentPin = L.divIcon({
+  className: '',
+  iconSize: [26, 26],
+  iconAnchor: [13, 13],
+  html: `<div style="
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: #991b1b;
+    color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px;
+    box-shadow: 0 0 12px rgba(153,27,27,0.8);
+    border: 2px solid #ffffff;
+    animation: pulse-danger 1.5s infinite;
+    cursor: pointer;
+  ">🚨</div>`,
+});
+
+/** Flies the map to focus target when requested */
+const MapFocusController = ({ focusTarget }) => {
+  const map = useMap();
+  useEffect(() => {
+    if (focusTarget?.lat != null && focusTarget?.lon != null) {
+      map.flyTo([focusTarget.lat, focusTarget.lon], focusTarget.zoom || 14, {
+        animate: true,
+        duration: 1.0,
+      });
+    }
+  }, [focusTarget, map]);
+  return null;
+};
 
 // ---------------------------------------------------------------------------
 // Inner map components (must live inside <MapContainer>)
@@ -324,6 +432,7 @@ const LocationField = ({ label, resolved, onClear, onSearch, searching, demoButt
 // ---------------------------------------------------------------------------
 export const RoutePlanner = () => {
   const { coords, status, requestLocation, setManualCoords } = useUserLocation();
+  const { socket } = useSocket();
 
   // Resolved geocode objects: { lat, lon, display_name }
   const [fromPlace, setFromPlace] = useState(null);
@@ -352,6 +461,159 @@ export const RoutePlanner = () => {
   // Phase 3: risk segment overlay + off-route rerouting
   const [riskSegments,  setRiskSegments ] = useState([]);   // [{lat,lon,category}] high-risk points
   const offRouteCount = useRef(0);                          // consecutive off-route GPS ticks
+
+  // Live NER segments (updated via socket when incidents are reported)
+  const [liveSegments, setLiveSegments] = useState(NER_ROAD_SEGMENTS);
+  // Route-crossing warning banner
+  const [routeRiskWarning, setRouteRiskWarning] = useState(null); // { segmentId, road_name }
+  // Map programmatic fly-to / zoom focus & active selection
+  const [mapFocus, setMapFocus] = useState(null);
+  const [selectedSegmentId, setSelectedSegmentId] = useState(null);
+  // Field-reported incidents from MongoDB
+  const [liveIncidents, setLiveIncidents] = useState([]);
+
+  // Fetch field-reported incidents from MongoDB
+  useEffect(() => {
+    let active = true;
+    const fetchIncidents = async () => {
+      try {
+        const token = localStorage.getItem('sih_token') || localStorage.getItem('token') || sessionStorage.getItem('token');
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const res = await fetch(`${BASE_URL}/api/road-incidents`, { headers });
+        const data = await res.json();
+        const list = data?.incidents || data?.data || (Array.isArray(data) ? data : []);
+        if (active && Array.isArray(list)) {
+          setLiveIncidents(list.map(inc => ({
+            id: inc._id || inc.id,
+            lat: inc.location?.coordinates?.[1] ?? inc.latitude,
+            lon: inc.location?.coordinates?.[0] ?? inc.longitude,
+            type: inc.incident_type || 'Hazard',
+            severity: inc.reported_risk_level || 'high',
+            road: inc.road_segment_id?.road_name,
+            district: inc.road_segment_id?.district,
+            desc: inc.description,
+            photo: inc.photo_url,
+          })).filter(i => i.lat != null && i.lon != null));
+        }
+      } catch { /* silent */ }
+    };
+
+    // Fetch live road segments with updated risk & (NEW) flags from MongoDB
+    const fetchLiveSegments = async () => {
+      try {
+        const res = await fetch(`${BASE_URL}/api/road-segments`);
+        const data = await res.json();
+        const segs = data?.roadSegments || [];
+        if (active && Array.isArray(segs) && segs.length > 0) {
+          setLiveSegments(prev => prev.map(p => {
+            const live = segs.find(s => s.segment_key === p.id || s.road_name === p.road_name);
+            if (!live) return p;
+            return {
+              ...p,
+              risk_level: live.current_risk_level || p.risk_level,
+              is_new: live.is_new || live.has_new_incident || false,
+              has_new_incident: live.has_new_incident || live.is_new || false,
+            };
+          }));
+        }
+      } catch { /* silent */ }
+    };
+
+    fetchIncidents();
+    fetchLiveSegments();
+    return () => { active = false; };
+  }, []);
+
+  // ── Socket.IO listeners ────────────────────────────────────────────────────
+  useEffect(() => {
+    // road_segment_updated → refresh live risk on map (turn RED/YELLOW) + mark (NEW) + warn if it crosses current route
+    const onSegUpdated = (seg) => {
+      const isHigh = seg.current_risk_level === 'high';
+      const riskColorText = isHigh ? 'RED (HIGH RISK)' : 'YELLOW (CAUTION)';
+      const roadName = seg.road_name || 'Road';
+
+      setLiveSegments(prev => prev.map(s => {
+        const matches = s.id === (seg.segment_key ?? seg._id ?? seg.id) || s.road_name === seg.road_name;
+        if (!matches) return s;
+        return {
+          ...s,
+          risk_level: seg.current_risk_level || (isHigh ? 'high' : 'medium'),
+          is_new: true,
+          has_new_incident: true,
+        };
+      }));
+
+      toast(`🚨 Road ${roadName} updated to ${riskColorText} — (NEW) incident logged!`, { icon: isHigh ? '🔴' : '🟡', duration: 7000 });
+
+      // Check if the updated segment is on the current planned route
+      if (navRoute && (seg.current_risk_level === 'high' || isHigh)) {
+        const crossed = getRouteCrossedSegments(navRoute, [{
+          ...NER_ROAD_SEGMENTS.find(s => s.id === (seg.segment_key ?? seg.id) || s.road_name === seg.road_name) ?? {},
+          risk_level: 'high',
+        }]);
+        if (crossed.length > 0) {
+          setRouteRiskWarning({ road_name: seg.road_name || crossed[0]?.road_name });
+          toast('⚠ A road on your route just became HIGH RISK — rerouting…', { icon: '🚨', duration: 6000 });
+          setTimeout(() => handleFindRoutes(), 500);
+        }
+      }
+    };
+
+    // reroute_push → auto re-route for this vehicle/user
+    const onReroute = (payload) => {
+      toast(`🔁 Reroute: ${payload.reason ?? 'New hazard on your route'}`, { duration: 7000 });
+      if (fromPlace && toPlace) setTimeout(() => handleFindRoutes(), 600);
+    };
+
+    const onIncidentCreated = (inc) => {
+      const lat = inc.latitude ?? inc.location?.coordinates?.[1];
+      const lon = inc.longitude ?? inc.location?.coordinates?.[0];
+      if (lat == null || lon == null) return;
+      const roadName = inc.road_segment_id?.road_name;
+      const isHigh = inc.reported_risk_level === 'high' || inc.reported_risk_level === 'critical';
+
+      setLiveIncidents(prev => [
+        {
+          id: inc._id || Date.now(),
+          lat, lon,
+          type: inc.incident_type || 'Hazard',
+          severity: inc.reported_risk_level || 'high',
+          road: roadName,
+          district: inc.road_segment_id?.district,
+          desc: inc.description,
+          photo: inc.photo_url,
+          is_new: true,
+        },
+        ...prev.slice(0, 24),
+      ]);
+
+      // Ensure the associated road turns RED or YELLOW and gains (NEW) marker
+      if (roadName) {
+        setLiveSegments(prev => prev.map(s => {
+          if (s.road_name === roadName || s.id === roadName) {
+            return {
+              ...s,
+              risk_level: isHigh ? 'high' : 'medium',
+              is_new: true,
+              has_new_incident: true,
+            };
+          }
+          return s;
+        }));
+      }
+
+      toast(`🚨 Incident reported on ${roadName || 'road'} — marked (NEW) on map!`, { duration: 6000 });
+    };
+
+    socket.on('road_segment_updated', onSegUpdated);
+    socket.on('reroute_push',         onReroute);
+    socket.on('incident_created',     onIncidentCreated);
+    return () => {
+      socket.off('road_segment_updated', onSegUpdated);
+      socket.off('reroute_push',         onReroute);
+      socket.off('incident_created',     onIncidentCreated);
+    };
+  }, [socket, navRoute, fromPlace, toPlace]);
 
   // ---- Start GPS on mount ----
   useEffect(() => { requestLocation(); }, []);
@@ -573,6 +835,14 @@ export const RoutePlanner = () => {
   const remainingDist = navSteps.slice(currentStep).reduce((a, s) => a + s.distanceM, 0);
   const remainingTime = navSteps.slice(currentStep).reduce((a, s) => a + s.durationS, 0);
 
+  // Compute which NER segments the current route crosses — used by the risk breakdown panel
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const crossedSegments = navRoute ? getRouteCrossedSegments(navRoute, liveSegments) : [];
+  const highSegments    = crossedSegments.filter(s => s.risk_level === 'high');
+  const medSegments     = crossedSegments.filter(s => s.risk_level === 'medium');
+  const saferAlt        = routes.length > 1 && selectedIdx !== 0 ? routes[0] : null;
+
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -605,28 +875,225 @@ export const RoutePlanner = () => {
             {/* Fit to route after search (non-navigation) */}
             {!navigating && navRoute && <FitToBounds coords={navRoute} />}
 
-            {/* Planned route polyline — orange */}
-            {navRoute && (
-              <Polyline positions={navRoute} color="#f97316" weight={5} opacity={0.85} />
-            )}
+            {/* Map programmatic fly-to focus */}
+            <MapFocusController focusTarget={mapFocus} />
 
-            {/* Risk overlay — red dashed dots at high-risk sampled points */}
-            {riskSegments.map((pt, i) => (
-              <CircleMarker
-                key={`risk-${i}`}
-                center={[pt.lat, pt.lon]}
-                radius={8}
-                pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.7, dashArray: '4 2', weight: 2 }}
-              >
-                <Popup>
-                  <div style={{ padding: '4px' }}>
-                    <div style={{ fontWeight: 700, color: '#ef4444', marginBottom: 2 }}>⚠ {pt.category} Risk</div>
-                    <div style={{ fontSize: '0.75rem' }}>Landslide probability: {pt.pct?.toFixed(1)}%</div>
-                    <div style={{ fontSize: '0.72rem', color: '#666', marginTop: 2 }}>Reduce speed — risky stretch ahead</div>
+            {/* ── Critical NER Road Segments Layer (High risk in Red, Caution in Amber, Clear in Green) ── */}
+            {liveSegments.map((seg) => {
+              const isCrossed = crossedSegments.some(cs => cs.id === seg.id);
+              const isSelected = selectedSegmentId === seg.id;
+              const isNew = Boolean(
+                seg.is_new ||
+                seg.has_new_incident ||
+                liveIncidents.some(i => i.road && (i.road.toLowerCase() === seg.road_name.toLowerCase() || i.road.toLowerCase() === seg.id?.toLowerCase()))
+              );
+              // Active incidents guarantee RED (high) or YELLOW (medium)
+              const effectiveRisk = isNew && seg.risk_level === 'low' ? 'medium' : seg.risk_level;
+              const isHigh = effectiveRisk === 'high';
+              const isMed  = effectiveRisk === 'medium';
+              const color  = isHigh ? '#dc2626' : isMed ? '#f59e0b' : '#22c55e';
+              const weight = isSelected ? 9 : isCrossed ? (isHigh ? 8 : 6.5) : isNew ? 7.5 : (isHigh ? 6 : isMed ? 5 : 3.5);
+              const opacity = isSelected ? 1 : isCrossed ? 0.95 : isNew ? 0.95 : (isHigh ? 0.85 : isMed ? 0.75 : 0.45);
+              const midIdx = Math.floor(seg.path.length / 2);
+              const midPt  = seg.path[midIdx] ?? seg.path[0];
+
+              return (
+                <span key={seg.id}>
+                  {/* Road Polyline */}
+                  <Polyline
+                    positions={seg.path}
+                    pathOptions={{
+                      color,
+                      weight,
+                      opacity,
+                      lineCap: 'round',
+                      lineJoin: 'round',
+                      dashArray: !isCrossed && !isHigh && !isMed && !isNew ? '4 6' : null,
+                    }}
+                    eventHandlers={{
+                      click: () => {
+                        setSelectedSegmentId(seg.id);
+                        setMapFocus({ lat: midPt[0], lon: midPt[1], zoom: 14, id: seg.id, t: Date.now() });
+                      },
+                    }}
+                  >
+                    <Popup minWidth={240}>
+                      <div style={{ padding: '6px 2px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                          <div style={{ width: 10, height: 10, borderRadius: '50%', background: color }} />
+                          <strong style={{ fontSize: '0.95rem' }}>{seg.road_name}</strong>
+                          {isNew && (
+                            <span style={{
+                              background: isHigh ? '#fee2e2' : '#fef3c7',
+                              color: isHigh ? '#dc2626' : '#b45309',
+                              border: `1.5px solid ${isHigh ? '#fca5a5' : '#fde68a'}`,
+                              padding: '1px 6px',
+                              borderRadius: 4,
+                              fontSize: '0.72rem',
+                              fontWeight: 900,
+                            }}>
+                              (NEW)
+                            </span>
+                          )}
+                          <span style={{
+                            marginLeft: 'auto', fontSize: '0.7rem', fontWeight: 800,
+                            padding: '2px 6px', borderRadius: 4,
+                            background: isHigh ? '#fef2f2' : isMed ? '#fffbeb' : '#f0fdf4',
+                            color, border: `1px solid ${color}`,
+                          }}>
+                            {isHigh ? '🔴 HIGH RISK' : isMed ? '🟡 CAUTION' : '🟢 CLEAR'}
+                          </span>
+                        </div>
+                        {isNew && (
+                          <div style={{
+                            padding: '4px 8px', background: isHigh ? '#fee2e2' : '#fef3c7',
+                            border: `1.5px solid ${isHigh ? '#f87171' : '#facc15'}`,
+                            borderRadius: 6, fontSize: '0.74rem', fontWeight: 800,
+                            color: isHigh ? '#b91c1c' : '#b45309', marginBottom: 6,
+                          }}>
+                            🚨 (NEW) INCIDENT REPORTED ON THIS ROAD
+                          </div>
+                        )}
+                        {isCrossed && (
+                          <div style={{
+                            padding: '5px 8px', background: '#fef2f2', border: '1.5px solid #ef4444',
+                            borderRadius: 6, fontSize: '0.75rem', fontWeight: 700, color: '#ef4444', marginBottom: 8,
+                          }}>
+                            ⚠ THIS ROAD IS ON YOUR ACTIVE ROUTE!
+                          </div>
+                        )}
+                        <div style={{ fontSize: '0.78rem', color: '#555', marginBottom: 6 }}>
+                          <strong>{seg.from_node}</strong> → <strong>{seg.to_node}</strong> ({seg.length_km} km)
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 8px', fontSize: '0.74rem', marginBottom: 6 }}>
+                          <span>📍 District: <strong>{seg.district}</strong></span>
+                          <span>🏔 Slope: <strong>{seg.slope_deg}°</strong></span>
+                          <span>🌧 Rainfall: <strong>{seg.rainfall_mm} mm</strong></span>
+                          <span>🛣 On Route: <strong>{isCrossed ? 'YES' : 'No'}</strong></span>
+                        </div>
+                        {seg.reason && (
+                          <div style={{
+                            fontSize: '0.72rem', color: isHigh ? '#b91c1c' : '#854d0e',
+                            background: isHigh ? '#fee2e2' : '#fef3c7',
+                            borderLeft: `3px solid ${color}`,
+                            padding: '4px 8px', borderRadius: '0 4px 4px 0',
+                          }}>
+                            ⚠ {seg.reason}
+                          </div>
+                        )}
+                      </div>
+                    </Popup>
+                  </Polyline>
+
+                  {/* Road Name Label at midpoint with (NEW) badge */}
+                  {(isCrossed || isHigh || isMed || isNew) && (
+                    <Marker
+                      position={midPt}
+                      icon={createSegBadge({ ...seg, risk_level: effectiveRisk }, isCrossed, isNew)}
+                      interactive={false}
+                      zIndexOffset={isNew ? 650 : isCrossed ? 400 : -100}
+                    />
+                  )}
+
+                  {/* Hazard Marker at midpoint for High & Caution road segments or (NEW) incidents */}
+                  {(isHigh || isMed || isNew) && (
+                    <Marker
+                      position={midPt}
+                      icon={createHazardPin(effectiveRisk, isCrossed, isNew)}
+                      zIndexOffset={isCrossed ? 800 : isNew ? 750 : 500}
+                    >
+                      <Popup minWidth={240}>
+                        <div style={{ padding: '6px 2px' }}>
+                          {isNew && (
+                            <div style={{
+                              background: isHigh ? '#fee2e2' : '#fef3c7',
+                              color: isHigh ? '#b91c1c' : '#b45309',
+                              border: `1.5px solid ${isHigh ? '#f87171' : '#facc15'}`,
+                              padding: '4px 8px', borderRadius: 6, fontSize: '0.74rem',
+                              fontWeight: 800, marginBottom: 6,
+                            }}>
+                              🚨 (NEW) INCIDENT REPORTED ON THIS ROAD
+                            </div>
+                          )}
+                          <div style={{ fontWeight: 800, color, fontSize: '0.88rem', marginBottom: 4 }}>
+                            {isHigh ? '🚨 HIGH RISK LANDSLIDE HOTSPOT' : '🟡 CAUTION: TERRAIN INSTABILITY'}
+                          </div>
+                          <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span>{seg.road_name} ({seg.from_node} → {seg.to_node})</span>
+                            {isNew && (
+                              <span style={{
+                                background: isHigh ? '#dc2626' : '#d97706',
+                                color: '#fff', padding: '1px 6px', borderRadius: 4,
+                                fontSize: '0.7rem', fontWeight: 900
+                              }}>(NEW)</span>
+                            )}
+                          </div>
+                          {isCrossed && (
+                            <div style={{ color: '#ef4444', fontWeight: 700, fontSize: '0.75rem', marginBottom: 6, padding: '4px 6px', background: '#fee2e2', borderRadius: 4 }}>
+                              ⚠ ALERT: Your planned route crosses this hazard zone!
+                            </div>
+                          )}
+                          <div style={{ fontSize: '0.74rem', color: '#666', lineHeight: 1.4 }}>
+                            {seg.reason || 'Monsoon slope instability and potential rockfall zone.'}
+                          </div>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  )}
+                </span>
+              );
+            })}
+
+            {/* ── Live Field-Reported Incidents (from MongoDB / Socket.IO) ── */}
+            {liveIncidents.map(inc => (
+              <Marker key={`inc-${inc.id}`} position={[inc.lat, inc.lon]} icon={incidentPin} zIndexOffset={900}>
+                <Popup minWidth={230}>
+                  <div style={{ padding: '6px 2px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                      <span style={{ fontSize: '1rem' }}>🚨</span>
+                      <strong style={{ fontSize: '0.88rem', color: '#b91c1c' }}>{inc.type} Reported</strong>
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: '#333', marginBottom: 4 }}>
+                      <strong>Severity:</strong> <span style={{ textTransform: 'uppercase', fontWeight: 700, color: '#ef4444' }}>{inc.severity}</span>
+                    </div>
+                    {inc.road && (
+                      <div style={{ fontSize: '0.75rem', color: '#555', marginBottom: 4 }}>
+                        📍 Road: <strong>{inc.road}</strong> {inc.district && `(${inc.district})`}
+                      </div>
+                    )}
+                    {inc.desc && (
+                      <div style={{ fontSize: '0.73rem', color: '#444', marginBottom: 6, fontStyle: 'italic' }}>
+                        "{inc.desc}"
+                      </div>
+                    )}
+                    {inc.photo && (
+                      <img src={`${BASE_URL}${inc.photo}`} alt="Incident" style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 6, marginTop: 4 }} />
+                    )}
                   </div>
                 </Popup>
-              </CircleMarker>
+              </Marker>
             ))}
+
+            {/* ── Risk-colored route polyline (replaces single orange line) ── */}
+            {navRoute && (
+              <RiskPolyline routeCoords={navRoute} segments={liveSegments} />
+            )}
+
+            {/* ── Safe detour — green dashed, shown when a safer alternative exists ── */}
+            {routes.length > 1 && selectedIdx !== 0 && routes[0]?.coords && (
+              <RiskPolyline
+                routeCoords={routes[0].coords}
+                segments={liveSegments}
+                safeDetour
+              />
+            )}
+            {routes.length > 1 && selectedIdx === 0 && routes[1]?.coords && (
+              /* Show the original (riskier) route faded when safest is selected */
+              <Polyline
+                positions={routes[1].coords}
+                pathOptions={{ color: '#94a3b8', weight: 3, opacity: 0.4, dashArray: '4 6' }}
+              />
+            )}
 
             {/* "You are here" — live blue dot */}
             {coords && (
@@ -754,19 +1221,27 @@ export const RoutePlanner = () => {
 
           {/* Map legend (collapsed during navigation) */}
           {!navigating && (
-            <div className="map-legend" style={{ position: 'absolute', bottom: 16, left: 16, zIndex: 999, background: 'var(--surface-elevated)', fontSize: '0.76rem' }}>
+            <div className="map-legend" style={{ position: 'absolute', bottom: 16, left: 16, zIndex: 999, background: 'rgba(255,255,255,0.96)', fontSize: '0.76rem', borderRadius: 8, padding: '8px 12px', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
+              <div style={{ fontWeight: 700, fontSize: '0.7rem', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Map & Route Legend</div>
               {[
-                { color: '#3b82f6', label: 'You', glow: true },
-                { color: 'var(--success)', label: 'From' },
-                { color: 'var(--danger)',  label: 'To' },
-                { color: '#f97316', label: 'Route', line: true },
-              ].map(({ color, label, glow, line }) => (
-                <div key={label} style={{ display: 'flex', gap: '7px', alignItems: 'center', marginBottom: 3 }}>
-                  {line
-                    ? <span style={{ width: 14, height: 3, background: color, borderRadius: 2 }} />
-                    : <span style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: color, border: '2px solid #fff', boxShadow: glow ? `0 0 6px ${color}` : 'none' }} />
-                  }
-                  {label}
+                { color: '#ef4444', label: 'High Risk Road (⚠ Hazard Pin)', line: true },
+                { color: '#f59e0b', label: 'Caution Road (▲ Instability)',   line: true },
+                { color: '#22c55e', label: 'Clear Route / Segment',          line: true },
+                { color: '#94a3b8', label: 'Alternate Route',                line: true, dash: true },
+                { icon: '🚨', label: 'Reported Incident (Field Officer)' },
+              ].map(({ color, label, line, dash, icon }) => (
+                <div key={label} style={{ display: 'flex', gap: '7px', alignItems: 'center', marginBottom: 4 }}>
+                  {line ? (
+                    <span style={{
+                      width: 22, height: 4, background: color, borderRadius: 2,
+                      opacity: dash ? 0.5 : 1,
+                      borderTop: dash ? `3px dashed ${color}` : 'none',
+                      background: dash ? 'transparent' : color,
+                    }} />
+                  ) : (
+                    <span style={{ fontSize: '10px' }}>{icon}</span>
+                  )}
+                  <span style={{ color: '#374151' }}>{label}</span>
                 </div>
               ))}
             </div>
@@ -954,6 +1429,225 @@ export const RoutePlanner = () => {
                   {navigating ? 'Navigation active…' : 'Start Navigation'}
                 </button>
               )}
+            </div>
+          )}
+
+          {/* ──── Route Risk Breakdown ──── */}
+          {navRoute && crossedSegments.length > 0 && (
+            <div className="card" style={{ padding: 0, overflow: 'visible' }}>
+
+              {/* ── Header ── */}
+              <div style={{
+                padding: '10px 14px',
+                borderBottom: '1px solid var(--line)',
+                background: highSegments.length > 0 ? '#fef2f2' : medSegments.length > 0 ? '#fffbeb' : '#f0fdf4',
+                borderRadius: '10px 10px 0 0',
+                display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <AlertTriangle size={15} color={highSegments.length > 0 ? '#ef4444' : medSegments.length > 0 ? '#f59e0b' : '#22c55e'} />
+                <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>Route Risk Breakdown</span>
+                <span style={{ marginLeft: 'auto', fontSize: '0.72rem', color: 'var(--slate)' }}>
+                  {crossedSegments.length} segment{crossedSegments.length !== 1 ? 's' : ''} on route
+                </span>
+              </div>
+
+              {/* ── Alert banner ── */}
+              {highSegments.length > 0 && (
+                <div style={{
+                  margin: '10px 14px 0', padding: '9px 12px',
+                  background: '#fef2f2', border: '1.5px solid #ef4444',
+                  borderRadius: 8, fontSize: '0.8rem', lineHeight: 1.6,
+                }}>
+                  <span style={{ fontWeight: 700, color: '#ef4444' }}>
+                    ⚠ {highSegments.length} HIGH-RISK road{highSegments.length > 1 ? 's' : ''} on your route:
+                  </span>
+                  <span style={{ color: '#555' }}>
+                    {' '}{highSegments.map(s => s.road_name).join(', ')}.
+                    {saferAlt ? ' Safer detour shown as dashed green on map.' : ' Consider alternate routing.'}
+                  </span>
+                </div>
+              )}
+              {highSegments.length === 0 && medSegments.length > 0 && (
+                <div style={{
+                  margin: '10px 14px 0', padding: '8px 12px',
+                  background: '#fffbeb', border: '1.5px solid #f59e0b',
+                  borderRadius: 8, fontSize: '0.79rem', lineHeight: 1.5,
+                }}>
+                  <span style={{ fontWeight: 700, color: '#a16207' }}>
+                    🟡 {medSegments.length} CAUTION segment{medSegments.length > 1 ? 's' : ''} — drive carefully.
+                  </span>
+                </div>
+              )}
+
+              {/* ── Live reroute warning ── */}
+              {routeRiskWarning && (
+                <div style={{
+                  margin: '8px 14px 0', padding: '7px 12px',
+                  background: '#fff7ed', border: '1.5px solid #f97316',
+                  borderRadius: 8, fontSize: '0.77rem',
+                  display: 'flex', alignItems: 'center', gap: 7,
+                }}>
+                  <span style={{ fontSize: '1.1rem' }}>🚨</span>
+                  <span><strong>{routeRiskWarning.road_name}</strong> just became high-risk — recalculating…</span>
+                  <button onClick={() => setRouteRiskWarning(null)}
+                    style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: '1rem', color: '#999' }}>✕</button>
+                </div>
+              )}
+
+              {/* ── Per-segment table ── */}
+              <div style={{ padding: '10px 14px 14px' }}>
+                {/* Table header */}
+                <div style={{
+                  display: 'grid', gridTemplateColumns: '1fr auto auto',
+                  gap: '2px 10px', fontSize: '0.7rem', color: 'var(--slate)',
+                  fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em',
+                  paddingBottom: 6, borderBottom: '2px solid var(--line)', marginBottom: 4,
+                }}>
+                  <span>Road / Segment</span>
+                  <span style={{ textAlign: 'center' }}>Risk</span>
+                  <span>km</span>
+                </div>
+
+                {crossedSegments.map(seg => {
+                  const isNew = Boolean(
+                    seg.is_new ||
+                    seg.has_new_incident ||
+                    liveIncidents.some(i => i.road && (i.road.toLowerCase() === seg.road_name.toLowerCase() || i.road.toLowerCase() === seg.id?.toLowerCase()))
+                  );
+                  const effectiveRisk = isNew && seg.risk_level === 'low' ? 'medium' : seg.risk_level;
+                  const isHigh = effectiveRisk === 'high';
+                  const isMed  = effectiveRisk === 'medium';
+                  const color  = isHigh ? '#dc2626' : isMed ? '#f59e0b' : '#22c55e';
+                  const bgCol  = isHigh ? '#fef2f2' : isMed ? '#fffbeb' : '#f0fdf4';
+                  const emoji  = isHigh ? '🔴' : isMed ? '🟡' : '🟢';
+                  const badge  = isHigh ? 'HIGH' : isMed ? 'CAUTION' : 'CLEAR';
+                  const midIdx = Math.floor(seg.path.length / 2);
+                  const midPt  = seg.path[midIdx] ?? seg.path[0];
+                  const isSelected = selectedSegmentId === seg.id;
+
+                  const focusThisSegment = () => {
+                    setSelectedSegmentId(seg.id);
+                    setMapFocus({ lat: midPt[0], lon: midPt[1], zoom: 14, id: seg.id, t: Date.now() });
+                  };
+
+                  return (
+                    <div
+                      key={seg.id}
+                      onClick={focusThisSegment}
+                      style={{
+                        display: 'grid', gridTemplateColumns: '1fr auto auto',
+                        gap: '2px 10px', padding: '10px 8px',
+                        borderBottom: '1px solid var(--line)',
+                        alignItems: 'start',
+                        borderRadius: 6,
+                        cursor: 'pointer',
+                        background: isSelected ? 'rgba(59, 130, 246, 0.08)' : 'transparent',
+                        borderLeft: isSelected ? '3px solid var(--accent)' : '3px solid transparent',
+                        transition: 'background 0.2s',
+                      }}
+                      title="Click to view and zoom this road on map"
+                    >
+                      {/* Road info */}
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 700, fontSize: '0.84rem', color: 'var(--ink)' }}>
+                            {seg.road_name}
+                          </span>
+                          {isNew && (
+                            <span style={{
+                              background: isHigh ? '#fee2e2' : '#fef3c7',
+                              color: isHigh ? '#dc2626' : '#b45309',
+                              border: `1.5px solid ${isHigh ? '#fca5a5' : '#fde68a'}`,
+                              padding: '1px 6px',
+                              borderRadius: 4,
+                              fontSize: '0.7rem',
+                              fontWeight: 900,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3,
+                              animation: 'pulse-danger 2s infinite',
+                            }}>
+                              (NEW)
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); focusThisSegment(); }}
+                            style={{
+                              padding: '2px 6px',
+                              fontSize: '0.67rem',
+                              fontWeight: 600,
+                              background: '#eff6ff',
+                              color: '#2563eb',
+                              border: '1px solid #bfdbfe',
+                              borderRadius: 4,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3,
+                            }}
+                            title="Focus this danger zone on map"
+                          >
+                            📍 View on Map
+                          </button>
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--slate)', marginTop: 2 }}>
+                          {seg.from_node} → {seg.to_node}
+                        </div>
+                        <div style={{ fontSize: '0.68rem', color: 'var(--slate)', marginTop: 1 }}>
+                          📍 {seg.district} · 🏔 {seg.slope_deg}° · 🌧 {seg.rainfall_mm} mm
+                        </div>
+                        {seg.reason && (
+                          <div style={{
+                            fontSize: '0.68rem', color, marginTop: 4,
+                            paddingLeft: 6, borderLeft: `2px solid ${color}`,
+                          }}>
+                            ⚠ {seg.reason}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Risk badge */}
+                      <div style={{
+                        padding: '3px 8px',
+                        background: bgCol, color, border: `1.5px solid ${color}`,
+                        borderRadius: 6, fontWeight: 800, fontSize: '0.68rem',
+                        whiteSpace: 'nowrap', textAlign: 'center',
+                        alignSelf: 'start',
+                      }}>
+                        {emoji} {badge}
+                      </div>
+
+                      {/* Distance */}
+                      <div style={{ fontWeight: 600, fontSize: '0.78rem', color: 'var(--slate)', alignSelf: 'start' }}>
+                        {seg.length_km} km
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Detour note */}
+                {saferAlt && (
+                  <div style={{
+                    marginTop: 10, padding: '7px 10px',
+                    background: '#f0fdf4', border: '1px solid #86efac',
+                    borderRadius: 7, display: 'flex', alignItems: 'center', gap: 6,
+                    fontSize: '0.75rem', color: '#15803d', fontWeight: 600,
+                  }}>
+                    <ShieldCheck size={13} />
+                    Safer route ({saferAlt.distKm} km) shown as green dashes on map
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ─ No-route placeholder ─ */}
+          {navRoute && crossedSegments.length === 0 && (
+            <div className="card" style={{ padding: '12px 14px', textAlign: 'center', color: 'var(--slate)', fontSize: '0.8rem' }}>
+              <ShieldCheck size={18} color="#22c55e" style={{ marginBottom: 4 }} />
+              <div style={{ fontWeight: 600, color: '#15803d' }}>Route looks clear</div>
+              <div style={{ marginTop: 2 }}>No high-risk NER segments detected on this path.</div>
             </div>
           )}
 

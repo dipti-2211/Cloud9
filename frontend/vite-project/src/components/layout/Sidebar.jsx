@@ -6,7 +6,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Truck, Route, AlertTriangle, Package,
-  Bell, Settings, Navigation, UserPlus, Car, KeyRound, ShieldCheck, MapPin, AlertOctagon, UsersRound,
+  Bell, Settings, Navigation, UserPlus, Car, KeyRound, MapPin, AlertOctagon, UsersRound, Siren,
 } from 'lucide-react';
 import { auth } from '../../services/api';
 
@@ -36,8 +36,9 @@ export const Sidebar = () => {
     { path:'/incidents',      label:'Incidents',       icon:AlertTriangle },
     { path:'/deliveries',     label:'Deliveries',      icon:Package },
     { path:'/alerts',         label:'Alerts',          icon:Bell },
-    { path:'/route-planner',  label:'Route Planner',   icon:Navigation },
-    { path:'/critical-roads', label:'Critical Roads',  icon:AlertOctagon },
+    { path:'/route-planner',   label:'Route Planner',   icon:Navigation },
+    { path:'/incident-report',  label:'Report Incident',  icon:Siren },
+    { path:'/critical-roads',  label:'Critical Roads',  icon:AlertOctagon },
   ];
 
   // Admin sees: Personnel hub + Register Officer + Register Operator + Account
@@ -74,14 +75,6 @@ export const Sidebar = () => {
 
         <div style={SECTION_LABEL}>Personnel</div>
         {personnelItems.map(item => <NavItem key={item.path} {...item} />)}
-
-        {/* Admin-only section */}
-        {isAdmin && (
-          <>
-            <div style={SECTION_LABEL}>Admin</div>
-            <NavItem path="/admin/approvals" label="Approvals" icon={ShieldCheck} />
-          </>
-        )}
 
         <div style={SECTION_LABEL}>System</div>
         {systemItems.map(item => <NavItem key={item.path} {...item} />)}

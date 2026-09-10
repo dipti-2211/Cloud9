@@ -22,9 +22,11 @@ const getAlerts =
                 .lean();
 
 
-            res.status(200).json(
-                alerts
-            );
+        res.status(200).json({
+                success: true,
+                alerts,
+                total: alerts.length,
+            });
 
         } catch (error) {
 

@@ -1,82 +1,40 @@
-const mongoose =
-    require("mongoose");
+const mongoose = require("mongoose");
 
 
 // ==============================
 // ALERT SCHEMA
 // ==============================
 
-const alertSchema =
-    new mongoose.Schema({
+const alertSchema = new mongoose.Schema({
 
-        latitude: {
+    // Legacy fields (from old landslide risk alerting via map-click / route-check)
+    latitude:       { type: Number },
+    longitude:      { type: Number },
+    riskCategory:   { type: String, enum: ["High", "Very High"] },
+    riskPercentage: { type: Number },
+    source:         { type: String, enum: ["map-click", "route-check", "officer", "system"], default: "system" },
 
-            type: Number,
+    // Full alert shape expected by the frontend dashboard Alerts panel
+    type:     { type: String, default: "ALERT" },
+    severity: { type: String, enum: ["LOW", "MODERATE", "HIGH", "CRITICAL"], default: "HIGH" },
+    message:  { type: String, required: true, default: "Alert" },
 
-            required: true
+    location: {
+        lat: { type: Number },
+        lon: { type: Number },
+    },
 
-        },
+    district: { type: String },
 
-        longitude: {
+    acknowledged:   { type: Boolean, default: false },
+    acknowledgedBy: { type: String },
+    acknowledgedAt: { type: Date },
 
-            type: Number,
+    createdBy: { type: String },
 
-            required: true
-
-        },
-
-        riskCategory: {
-
-            type: String,
-
-            required: true,
-
-            enum: [
-                "High",
-                "Very High"
-            ]
-
-        },
-
-        riskPercentage: {
-
-            type: Number,
-
-            required: true
-
-        },
-
-        message: {
-
-            type: String,
-
-            required: true
-
-        },
-
-        source: {
-
-            type: String,
-
-            required: true,
-
-            enum: [
-                "map-click",
-                "route-check"
-            ]
-
-        }
-
-    }, {
-
-        timestamps:
-            true
-
-    });
+}, {
+    timestamps: true,
+});
 
 
-module.exports =
-    mongoose.model(
-        "Alert",
-        alertSchema
-    );
+module.exports = mongoose.model("Alert", alertSchema);

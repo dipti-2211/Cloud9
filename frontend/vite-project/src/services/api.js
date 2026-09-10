@@ -18,11 +18,19 @@ export const BASE_URL = import.meta.env.VITE_API_URL || '';
 
 // ─── Token helpers ───────────────────────────────────────────────────────────
 export const auth = {
-  getToken:     () => localStorage.getItem('sih_token'),
+  getToken:     () => localStorage.getItem('sih_token') || localStorage.getItem('token'),
   getUser:      () => { try { return JSON.parse(localStorage.getItem('sih_user') || 'null'); } catch { return null; } },
-  setSession:   (token, user) => { localStorage.setItem('sih_token', token); localStorage.setItem('sih_user', JSON.stringify(user)); },
-  clearSession: () => { localStorage.removeItem('sih_token'); localStorage.removeItem('sih_user'); },
-  isLoggedIn:   () => !!localStorage.getItem('sih_token'),
+  setSession:   (token, user) => {
+    localStorage.setItem('sih_token', token);
+    localStorage.setItem('sih_user', JSON.stringify(user));
+    localStorage.setItem('token', token);
+  },
+  clearSession: () => {
+    localStorage.removeItem('sih_token');
+    localStorage.removeItem('sih_user');
+    localStorage.removeItem('token');
+  },
+  isLoggedIn:   () => !!(localStorage.getItem('sih_token') || localStorage.getItem('token')),
 };
 
 // ─── Base fetch (auto-attaches auth header) ──────────────────────────────────

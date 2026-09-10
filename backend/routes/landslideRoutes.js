@@ -13,8 +13,9 @@ const router =
     express.Router();
 
 
+// GET /api/landslide/risk?lat=&lon=
 router.get(
-    "/",
+    "/risk",
     getRisk
 );
 

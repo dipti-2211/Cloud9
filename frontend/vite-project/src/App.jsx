@@ -13,10 +13,10 @@ import { Login } from './pages/Login';
 import { RegisterFieldOfficer } from './pages/RegisterFieldOfficer';
 import { RegisterVehicleOperator } from './pages/RegisterVehicleOperator';
 import { AccountDetails } from './pages/AccountDetails';
-import { AdminApprovals } from './pages/AdminApprovals';
 import { Districts } from './pages/Districts';
 import { CriticalRoads } from './pages/CriticalRoads';
 import { Personnel } from './pages/Personnel';
+import { IncidentReport } from './pages/IncidentReport';
 import { auth } from './services/api';
 import { LanguageProvider } from './i18n/LanguageContext';
 
@@ -70,12 +70,12 @@ function App() {
             <Route path="register-officer"   element={<AdminRoute><RegisterFieldOfficer /></AdminRoute>} />
             <Route path="register-operator"  element={<AdminRoute><RegisterVehicleOperator /></AdminRoute>} />
             <Route path="account"            element={<AccountDetails />} />
-            {/* Admin only */}
-            <Route path="admin/approvals"    element={<AdminApprovals />} />
             {/* Phase 4: Critical roads analysis */}
             <Route path="critical-roads"     element={<CriticalRoads />} />
             {/* Phase 6: Personnel management (admin only) */}
             <Route path="personnel"           element={<AdminRoute><Personnel /></AdminRoute>} />
+            {/* Field officer incident reporting */}
+            <Route path="incident-report"     element={<IncidentReport />} />
           </Route>
 
           {/* Catch-all */}

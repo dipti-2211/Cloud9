@@ -200,15 +200,40 @@ export const Login = () => {
               ))}
             </div>
 
-            {/* Gov / Admin notice */}
+            {/* Gov / Admin notice with 1-click demo filler */}
             <div style={{
               fontSize: 12.5, color: '#5C7288', background: '#EAF4FC', backgroundColor: '#EAF4FC',
-              border: '1px solid #D6EAF9', borderRadius: 8, padding: '9px 12px',
-              marginBottom: 22, lineHeight: 1.5,
+              border: '1px solid #D6EAF9', borderRadius: 8, padding: '10px 12px',
+              marginBottom: 20, lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: 6,
             }}>
-              {tab === 'admin'
-                ? 'Administrator access only. Contact the system owner if you have lost your credentials.'
-                : 'Government-issued credentials only. No self-registration — accounts are created by the administrator.'}
+              <div>
+                {tab === 'admin'
+                  ? 'Administrator access. Full fleet management, road overrides, and intelligence controls.'
+                  : tab === 'officer'
+                  ? 'Field Officer portal. Report road landslides, take site photos, and trigger risk updates.'
+                  : 'Vehicle Operator portal. Landslide-safe navigation, turn-by-turn routing, and live reroutes.'}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px dashed #cde2f3', paddingTop: 6, marginTop: 2 }}>
+                <span style={{ fontSize: '11.5px', color: '#1E6FA8', fontWeight: 600 }}>
+                  Demo: <code>{tab === 'officer' ? 'OFC-1042' : tab === 'driver' ? 'VOP-2317' : 'admin'}</code> / <code>{tab === 'officer' ? 'officer123' : tab === 'driver' ? 'driver123' : 'admin123'}</code>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (tab === 'officer') { setUserId('OFC-1042'); setPassword('officer123'); }
+                    else if (tab === 'driver') { setUserId('VOP-2317'); setPassword('driver123'); }
+                    else { setUserId('admin'); setPassword('admin123'); }
+                    setError('');
+                  }}
+                  style={{
+                    padding: '3px 8px', fontSize: '11px', fontWeight: 700,
+                    background: '#1E6FA8', color: '#fff', border: 'none',
+                    borderRadius: 5, cursor: 'pointer',
+                  }}
+                >
+                  ⚡ Auto-fill
+                </button>
+              </div>
             </div>
 
             {/* Error */}

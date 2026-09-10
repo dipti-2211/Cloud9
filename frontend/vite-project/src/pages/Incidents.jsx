@@ -12,6 +12,7 @@
 import { incidents } from '../data/mockData';
 import { Badge } from '../components/common/Badge';
 import { PageHeader } from '../components/common/PageHeader';
+import { useNavigate } from 'react-router-dom';
 import { Modal } from '../components/common/Modal';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList
@@ -52,6 +53,7 @@ const CAUSE_COLORS = {
 const DEFAULT_COLOR = '#64748b';
 
 export const Incidents = () => {
+  const navigate = useNavigate();
   const { t } = useLang();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState(null);
@@ -230,7 +232,7 @@ export const Incidents = () => {
       <PageHeader
         title="Incident Management"
         description="Monitor and report GIS anomalies and road blockages. Fleet Ops module — illustrative scenario data."
-        actionButton={<button className="btn btn-primary" onClick={() => setIsModalOpen(true)}>+ Report Incident</button>}
+        actionButton={<button className="btn btn-primary" onClick={() => navigate('/incident-report')}>+ Report Incident</button>}
       />
       <DataSourceNote />
 

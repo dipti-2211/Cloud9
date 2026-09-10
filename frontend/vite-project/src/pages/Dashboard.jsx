@@ -366,8 +366,8 @@ export const Dashboard = () => {
       }))
     : [];
 
-  // Pass coords to map whenever we have them — GPS is valid even if risk engine is down
-  const mapCoords = coords;
+  // Default to Dima Hasao (NER hub) on dashboard map; user GPS is kept in Route Planner per user specification
+  const mapCoords = null;
 
   // ── Popover item builders ────────────────────────────────────────────────
   const SEVERITY_BADGE_COLOR = { CRITICAL: 'var(--danger)', WARNING: 'var(--warning)', INFO: 'var(--success)' };
@@ -460,6 +460,23 @@ export const Dashboard = () => {
       {/* Main Map Area */}
       <div className="card map-section" style={{ position: 'relative', padding: 0, overflow: 'hidden' }}>
         <MapPanel userCoords={mapCoords} />
+
+        {/* Road Risk Legend */}
+        <div className="map-legend">
+          <h4>Road Risk Level</h4>
+          <div className="map-legend-item">
+            <div className="map-legend-line" style={{ background: '#ef4444' }} />
+            <span>High Risk</span>
+          </div>
+          <div className="map-legend-item">
+            <div className="map-legend-line" style={{ background: '#f59e0b' }} />
+            <span>Caution</span>
+          </div>
+          <div className="map-legend-item">
+            <div className="map-legend-line" style={{ background: '#22c55e' }} />
+            <span>Clear</span>
+          </div>
+        </div>
 
         {/* "Plan a Route" CTA — top-right corner of the map */}
         <div style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 1000 }}>
