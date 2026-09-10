@@ -1,26 +1,31 @@
 /**
- * api.js — Production-ready API service layer
- * All calls hit the real Express backend at port 1710.
- * Mock data is used ONLY as a UI fallback when the backend collection is empty.
+ * api.js — API service layer
+ * All keys, methods and paths match the actual backend in server.js.
  */
 
-import { vehicles as mockVehicles, incidents as mockIncidents, roads as mockRoads, deliveries as mockDeliveries, dashboardKPIs } from '../data/mockData';
+import {
+  vehicles as mockVehicles,
+  incidents as mockIncidents,
+  roads as mockRoads,
+  deliveries as mockDeliveries,
+  dashboardKPIs,
+} from '../data/mockData';
 
-// ─── Config ────────────────────────────────────────────────────────────────
-// In production set VITE_API_URL=https://your-backend.onrender.com in Vercel/Netlify dashboard
-// In local dev this falls back to localhost:1710 automatically — no config needed
-export const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:1710';
+// ─── Config ─────────────────────────────────────────────────────────────────
+// In dev: BASE_URL is '' — Vite proxy forwards /api/* to http://localhost:1710
+// In production: set VITE_API_URL=https://your-backend.onrender.com
+export const BASE_URL = import.meta.env.VITE_API_URL || '';
 
-// ─── Token helpers ─────────────────────────────────────────────────────────
+// ─── Token helpers ───────────────────────────────────────────────────────────
 export const auth = {
-  getToken:     ()             => localStorage.getItem('sih_token'),
-  getUser:      ()             => { try { return JSON.parse(localStorage.getItem('sih_user') || 'null'); } catch { return null; } },
-  setSession:   (token, user)  => { localStorage.setItem('sih_token', token); localStorage.setItem('sih_user', JSON.stringify(user)); },
-  clearSession: ()             => { localStorage.removeItem('sih_token'); localStorage.removeItem('sih_user'); },
-  isLoggedIn:   ()             => !!localStorage.getItem('sih_token'),
+  getToken:     () => localStorage.getItem('sih_token'),
+  getUser:      () => { try { return JSON.parse(localStorage.getItem('sih_user') || 'null'); } catch { return null; } },
+  setSession:   (token, user) => { localStorage.setItem('sih_token', token); localStorage.setItem('sih_user', JSON.stringify(user)); },
+  clearSession: () => { localStorage.removeItem('sih_token'); localStorage.removeItem('sih_user'); },
+  isLoggedIn:   () => !!localStorage.getItem('sih_token'),
 };
 
-// ─── Base fetch with auth header ───────────────────────────────────────────
+// ─── Base fetch (auto-attaches auth header) ──────────────────────────────────
 async function request(path, options = {}) {
   const token = auth.getToken();
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
@@ -39,129 +44,115 @@ async function request(path, options = {}) {
   return data;
 }
 
-// ─── Auth ──────────────────────────────────────────────────────────────────
+// ─── Auth ────────────────────────────────────────────────────────────────────
 export const authAPI = {
   login: async (userId, password, role) => {
     const data = await request('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ userId, password, role }),
     });
-    if (data.token && data.user) {
-      auth.setSession(data.token, data.user);
-    }
+    if (data.token && data.user) auth.setSession(data.token, data.user);
     return data;
   },
 
-  logout: () => {
-    auth.clearSession();
-    window.location.href = '/login';
+  logout: () => { auth.clearSession(); window.location.href = '/login'; },
+
+  register: (payload) => request('/api/auth/register', { method: 'POST', body: JSON.stringify(payload) }),
+  getMe:    () => request('/api/auth/me'),
+
+  // Admin: GET /api/auth/users  →  { users:[...] }
+  getPending: async () => {
+    const data = await request('/api/auth/users');
+    return { data: data.users ?? data.data ?? [] };
   },
 
-  register:   async (payload) => request('/api/auth/register', { method: 'POST', body: JSON.stringify(payload) }),
-  getMe:      ()              => request('/api/auth/me'),
-  getPending: ()              => request('/api/auth/pending'),
-  approve:    (id)            => request(`/api/auth/approve/${id}`, { method: 'PUT' }),
-  reject:     (id)            => request(`/api/auth/reject/${id}`,  { method: 'PUT' }),
+  // Admin: PATCH /api/auth/users/:id/approve|reject
+  approve: (id) => request(`/api/auth/users/${id}/approve`, { method: 'PATCH' }),
+  reject:  (id) => request(`/api/auth/users/${id}/reject`,  { method: 'PATCH' }),
 };
 
-// ─── Vehicles ─────────────────────────────────────────────────────────────
+// ─── Vehicles ────────────────────────────────────────────────────────────────
+// Backend → { success, vehicles:[...], total }
 export const vehiclesAPI = {
   getAll: async () => {
     const data = await request('/api/vehicles');
-    if (!data.data || data.data.length === 0) return mockVehicles;
-    return data.data;
+    return data.vehicles?.length ? data.vehicles : mockVehicles;
   },
-  create: (payload) => request('/api/vehicles',     { method: 'POST',   body: JSON.stringify(payload) }),
-  update: (id, p)   => request(`/api/vehicles/${id}`,{ method: 'PUT',   body: JSON.stringify(p) }),
-  delete: (id)      => request(`/api/vehicles/${id}`,{ method: 'DELETE' }),
+  create: (payload) => request('/api/vehicles',       { method: 'POST',   body: JSON.stringify(payload) }),
+  update: (id, p)   => request(`/api/vehicles/${id}`, { method: 'PATCH',  body: JSON.stringify(p) }),
+  delete: (id)      => request(`/api/vehicles/${id}`, { method: 'DELETE' }),
 };
 
-// ─── Roads ────────────────────────────────────────────────────────────────
+// ─── Roads ───────────────────────────────────────────────────────────────────
+// Backend → { success, roads:[...], total }
 export const roadsAPI = {
   getAll: async () => {
     const data = await request('/api/roads');
-    if (!data.data || data.data.length === 0) return mockRoads;
-    return data.data;
+    return data.roads?.length ? data.roads : mockRoads;
   },
-  create: (payload) => request('/api/roads',     { method: 'POST',   body: JSON.stringify(payload) }),
-  update: (id, p)   => request(`/api/roads/${id}`,{ method: 'PUT',   body: JSON.stringify(p) }),
-  delete: (id)      => request(`/api/roads/${id}`,{ method: 'DELETE' }),
+  create: (payload) => request('/api/roads',       { method: 'POST',   body: JSON.stringify(payload) }),
+  update: (id, p)   => request(`/api/roads/${id}`, { method: 'PATCH',  body: JSON.stringify(p) }),
+  delete: (id)      => request(`/api/roads/${id}`, { method: 'DELETE' }),
 };
 
-// ─── Incidents ────────────────────────────────────────────────────────────
+// ─── Incidents ───────────────────────────────────────────────────────────────
+// Backend → { success, incidents:[...], total }
 export const incidentsAPI = {
   getAll: async () => {
     const data = await request('/api/incidents');
-    if (!data.data || data.data.length === 0) return mockIncidents;
-    return data.data;
+    return data.incidents?.length ? data.incidents : mockIncidents;
   },
-  create: (payload) => request('/api/incidents',     { method: 'POST',   body: JSON.stringify(payload) }),
-  update: (id, p)   => request(`/api/incidents/${id}`,{ method: 'PUT',   body: JSON.stringify(p) }),
-  delete: (id)      => request(`/api/incidents/${id}`,{ method: 'DELETE' }),
+  create: (payload) => request('/api/incidents',       { method: 'POST',   body: JSON.stringify(payload) }),
+  update: (id, p)   => request(`/api/incidents/${id}`, { method: 'PATCH',  body: JSON.stringify(p) }),
+  delete: (id)      => request(`/api/incidents/${id}`, { method: 'DELETE' }),
 };
 
-// ─── Deliveries ───────────────────────────────────────────────────────────
+// ─── Deliveries ──────────────────────────────────────────────────────────────
+// Backend → { success, deliveries:[...], total }
 export const deliveriesAPI = {
   getAll: async () => {
     const data = await request('/api/deliveries');
-    if (!data.data || data.data.length === 0) return mockDeliveries;
-    return data.data;
+    return data.deliveries?.length ? data.deliveries : mockDeliveries;
   },
-  create: (payload) => request('/api/deliveries',     { method: 'POST', body: JSON.stringify(payload) }),
-  update: (id, p)   => request(`/api/deliveries/${id}`,{ method: 'PUT', body: JSON.stringify(p) }),
+  create: (payload) => request('/api/deliveries',       { method: 'POST',  body: JSON.stringify(payload) }),
+  update: (id, p)   => request(`/api/deliveries/${id}`, { method: 'PATCH', body: JSON.stringify(p) }),
 };
 
-// ─── Alerts (real-time landslide alerts) ─────────────────────────────────
+// ─── Alerts ──────────────────────────────────────────────────────────────────
+// Backend → { success, alerts:[...], total }
+// Returns plain array so Alerts.jsx can call .filter() directly
 export const alertsAPI = {
-  getAll: async () => {
-    const res = await fetch(`${BASE_URL}/api/alerts`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  },
+  getAll:      async () => { const d = await request('/api/alerts'); return d.alerts ?? []; },
+  acknowledge: (id)     => request(`/api/alerts/${id}/acknowledge`, { method: 'PATCH' }),
 };
 
-// ─── Settings ─────────────────────────────────────────────────────────────
+// ─── Settings ────────────────────────────────────────────────────────────────
 export const settingsAPI = {
   get:    ()        => request('/api/settings'),
-  update: (payload) => request('/api/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+  update: (payload) => request('/api/settings', { method: 'PATCH', body: JSON.stringify(payload) }),
 };
 
-// ─── Landslide risk engine ────────────────────────────────────────────────
-export const getLandslideRisk = async (lat, lon) => {
-  const res = await fetch(`${BASE_URL}/api/landslide?lat=${lat}&lon=${lon}`);
-  if (!res.ok) { const e = await res.json().catch(() => null); throw new Error(e?.message ?? `HTTP ${res.status}`); }
-  return res.json();
-};
+// ─── Landslide risk  GET /api/landslide/risk?lat=&lon= ──────────────────────
+export const getLandslideRisk = (lat, lon) => request(`/api/landslide/risk?lat=${lat}&lon=${lon}`);
 
-export const getRouteRisk = async (points) => {
-  const res = await fetch(`${BASE_URL}/api/route-risk`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ points }),
-  });
-  if (!res.ok) { const e = await res.json().catch(() => null); throw new Error(e?.message ?? `HTTP ${res.status}`); }
-  return res.json();
-};
+// ─── Route risk  POST /api/route-risk  { waypoints:[{lat,lon}] } ─────────────
+export const getRouteRisk = (points) =>
+  request('/api/route-risk', { method: 'POST', body: JSON.stringify({ waypoints: points }) });
 
-// ─── Geocoding ────────────────────────────────────────────────────────────
-/** Forward geocode: place name → { lat, lon, display_name } */
-export const geocodePlace = async (q) => {
-  const res = await fetch(`${BASE_URL}/api/geocode?q=${encodeURIComponent(q)}`);
-  if (!res.ok) { const e = await res.json().catch(() => null); throw new Error(e?.message ?? `HTTP ${res.status}`); }
-  return res.json();
-};
+// ─── Critical Roads  GET /api/critical-roads ────────────────────────────────
+export const getCriticalRoads = () => request('/api/critical-roads');
 
-/** Reverse geocode: lat/lon → { lat, lon, display_name, short_name }
- *  Uses the real Nominatim /reverse endpoint (not the forward search).
- */
-export const reverseGeocode = async (lat, lon) => {
-  const res = await fetch(`${BASE_URL}/api/geocode/reverse?lat=${lat}&lon=${lon}`);
-  if (!res.ok) { const e = await res.json().catch(() => null); throw new Error(e?.message ?? `HTTP ${res.status}`); }
-  return res.json();
-};
+// ─── Forecast Risk  GET /api/forecast-risk?lat=&lon= ────────────────────────
+export const getForecastRisk = (lat, lon) => request(`/api/forecast-risk?lat=${lat}&lon=${lon}`);
 
-// ─── Legacy `api` object (used by Navbar, Dashboard — keep compatible) ────
+// ─── Geocoding ───────────────────────────────────────────────────────────────
+export const geocodePlace   = (q)        => request(`/api/geocode?q=${encodeURIComponent(q)}`);
+export const reverseGeocode = (lat, lon) => request(`/api/geocode/reverse?lat=${lat}&lon=${lon}`);
+
+// ─── Legacy api object  (Navbar / Dashboard / Alerts use this) ───────────────
 export const api = {
   getDashboardData: async () => dashboardKPIs,
-  getAlerts:        ()      => alertsAPI.getAll(),
+  getAlerts:        ()      => alertsAPI.getAll(),   // plain array
   getVehicles:      ()      => vehiclesAPI.getAll(),
   getIncidents:     ()      => incidentsAPI.getAll(),
   getRoads:         ()      => roadsAPI.getAll(),

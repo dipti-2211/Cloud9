@@ -4,3 +4,4 @@ pyrosm
 geopandas
 shapely
 scipy
+networkx>=3.0

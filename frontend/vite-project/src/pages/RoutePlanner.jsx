@@ -12,7 +12,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  MapContainer, TileLayer, Marker, Popup, Polyline, useMap
+  MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker, useMap
 } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -21,6 +21,7 @@ import {
   ArrowRight, Play, Square, SkipForward, Crosshair
 } from 'lucide-react';
 import { geocodePlace, getRouteRisk } from '../services/api';
+import toast from 'react-hot-toast';
 import { useUserLocation } from '../hooks/useUserLocation';
 import { PageHeader } from '../components/common/PageHeader';
 import rawDemoLocations from '../data/demoLocations.json';
@@ -195,6 +196,19 @@ const RecenterOnLocation = ({ coords, followUser, navMode }) => {
   return null;
 };
 
+/** Calls map.invalidateSize() on window resize — fixes blank map on mobile after orientation change */
+const MapResizer = () => {
+  const map = useMap();
+  useEffect(() => {
+    const onResize = () => { map.invalidateSize(); };
+    window.addEventListener('resize', onResize);
+    // Also call once on mount in case the container was hidden/resized before init
+    setTimeout(() => map.invalidateSize(), 200);
+    return () => window.removeEventListener('resize', onResize);
+  }, [map]);
+  return null;
+};
+
 /** Fits the map to a route's bounds when a route is selected (non-navigation) */
 const FitToBounds = ({ coords }) => {
   const map = useMap();
@@ -335,6 +349,10 @@ export const RoutePlanner = () => {
   const [navSteps,      setNavSteps     ] = useState([]);   // parsed step objects
   const [navRoute,      setNavRoute     ] = useState(null); // [lat,lon][] of selected route
 
+  // Phase 3: risk segment overlay + off-route rerouting
+  const [riskSegments,  setRiskSegments ] = useState([]);   // [{lat,lon,category}] high-risk points
+  const offRouteCount = useRef(0);                          // consecutive off-route GPS ticks
+
   // ---- Start GPS on mount ----
   useEffect(() => { requestLocation(); }, []);
 
@@ -359,7 +377,7 @@ export const RoutePlanner = () => {
     }
   }, [coords]);
 
-  // ---- Navigation: step advancement ----
+  // ---- Navigation: step advancement + off-route rerouting ----
   useEffect(() => {
     if (!navigating || !coords || !navSteps.length) return;
     const ADVANCE_M = 60; // advance step when within 60m of its maneuver point
@@ -372,7 +390,26 @@ export const RoutePlanner = () => {
       else break;
     }
     if (next !== currentStep) setCurrentStep(next);
-  }, [coords, navigating, navSteps, currentStep]);
+
+    // Off-route detection: if user is > 80m from every point on navRoute, count up
+    if (navRoute) {
+      const minDist = Math.min(
+        ...navRoute.map(([rlat, rlon]) => haversineM(coords.lat, coords.lon, rlat, rlon))
+      );
+      if (minDist > 80) {
+        offRouteCount.current += 1;
+        if (offRouteCount.current >= 3) {
+          // Trigger reroute from current position
+          offRouteCount.current = 0;
+          toast('\u21a9 Rerouting\u2026', { icon: '\ud83d\uddfa' });
+          setFromPlace({ lat: coords.lat, lon: coords.lon, display_name: `Your location (${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)})` });
+          setTimeout(() => handleFindRoutes(), 100);
+        }
+      } else {
+        offRouteCount.current = 0;
+      }
+    }
+  }, [coords, navigating, navSteps, currentStep, navRoute]);
 
   // ---------------------------------------------------------------------------
   // Geocode handlers
@@ -449,19 +486,30 @@ export const RoutePlanner = () => {
 
       const scored = await Promise.all(
         data.routes.map(async (route) => {
-          const coords = decodePolyline(route.geometry);
+          const routeCoords = decodePolyline(route.geometry);
           let riskResults = [];
           try {
             const r = await getRouteRisk(
-              samplePoints(coords, 20).map(([lat, lon]) => ({ lat, lon }))
+              samplePoints(routeCoords, 20).map(([lat, lon]) => ({ lat, lon }))
             );
-            riskResults = r.results ?? [];
+            riskResults = r.results ?? r.segments ?? [];
           } catch { /* scoring failed — route still shown */ }
 
           const { pct, worst, score, outsideCoverage } = scoreRoute(riskResults);
           const steps = parseSteps(route);
+
+          // Build risk-segment overlay: high-risk sample points mapped back to route coords
+          const highRiskPoints = riskResults
+            .filter(r => r && (r.risk_category === 'High' || r.risk_category === 'Very High'))
+            .map(r => ({
+              lat: r.lat ?? null, lon: r.lon ?? null,
+              category: r.risk_category,
+              pct: r.risk_percentage,
+            }))
+            .filter(r => r.lat != null && r.lon != null);
+
           return {
-            coords,
+            coords: routeCoords,
             steps,
             distKm: (route.distance / 1000).toFixed(1),
             mins: Math.round(route.duration / 60),
@@ -469,6 +517,7 @@ export const RoutePlanner = () => {
             worstCategory: worst,
             score,
             outsideCoverage,
+            highRiskPoints,
           };
         })
       );
@@ -478,6 +527,7 @@ export const RoutePlanner = () => {
       setSelectedIdx(0);
       setNavRoute(scored[0].coords);
       setNavSteps(scored[0].steps);
+      setRiskSegments(scored[0].highRiskPoints ?? []);
 
     } catch (e) { setError(e.message); }
     finally { setRouteLoading(false); }
@@ -503,6 +553,7 @@ export const RoutePlanner = () => {
     setSelectedIdx(idx);
     setNavRoute(routes[idx].coords);
     setNavSteps(routes[idx].steps);
+    setRiskSegments(routes[idx].highRiskPoints ?? []);
     setCurrentStep(0);
     if (navigating) { setCurrentStep(0); setFollowUser(true); }
   };
@@ -532,12 +583,12 @@ export const RoutePlanner = () => {
         description="Live GPS tracking · Landslide-aware routing · Turn-by-turn navigation"
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 370px', gap: '16px', flex: 1, minHeight: 0 }}>
+      <div className="route-planner-grid">
 
         {/* ================================================================
             LEFT — Map
         ================================================================ */}
-        <div className="card" style={{ padding: 0, overflow: 'hidden', position: 'relative' }}>
+        <div className="card map-card" style={{ padding: 0, overflow: 'hidden', position: 'relative' }}>
           <MapContainer center={mapCenter} zoom={coords ? 13 : 9} zoomControl={false}
             style={{ height: '100%', width: '100%' }}>
             <TileLayer
@@ -545,16 +596,37 @@ export const RoutePlanner = () => {
               attribution="&copy; Stadia Maps &copy; OpenStreetMap contributors"
             />
 
+            {/* Mobile: recalculate map size after resize/orientation change */}
+            <MapResizer />
+
             {/* Recenter / follow logic */}
             <RecenterOnLocation coords={coords} followUser={followUser} navMode={navigating} />
 
             {/* Fit to route after search (non-navigation) */}
             {!navigating && navRoute && <FitToBounds coords={navRoute} />}
 
-            {/* Planned route polyline */}
+            {/* Planned route polyline — orange */}
             {navRoute && (
               <Polyline positions={navRoute} color="#f97316" weight={5} opacity={0.85} />
             )}
+
+            {/* Risk overlay — red dashed dots at high-risk sampled points */}
+            {riskSegments.map((pt, i) => (
+              <CircleMarker
+                key={`risk-${i}`}
+                center={[pt.lat, pt.lon]}
+                radius={8}
+                pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.7, dashArray: '4 2', weight: 2 }}
+              >
+                <Popup>
+                  <div style={{ padding: '4px' }}>
+                    <div style={{ fontWeight: 700, color: '#ef4444', marginBottom: 2 }}>⚠ {pt.category} Risk</div>
+                    <div style={{ fontSize: '0.75rem' }}>Landslide probability: {pt.pct?.toFixed(1)}%</div>
+                    <div style={{ fontSize: '0.72rem', color: '#666', marginTop: 2 }}>Reduce speed — risky stretch ahead</div>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            ))}
 
             {/* "You are here" — live blue dot */}
             {coords && (

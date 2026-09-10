@@ -258,12 +258,63 @@ app.post("/api/auth/register", async (req, res) => {
     }
 });
 
+// POST /api/auth/register-officer (alias — admin only, delegates to register)
+app.post("/api/auth/register-officer", async (req, res) => {
+    req.body.role = req.body.role || "Field Officer";
+    // Re-use the same handler logic
+    try {
+        const decoded = verifyToken(req);
+        if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+        const { userId, password, role, firstName, lastName, email, ...rest } = req.body;
+        if (!userId || !password) return res.status(400).json({ success: false, message: "userId and password are required" });
+        if (USERS.find(u => u.userId === userId)) return res.status(409).json({ success: false, message: "User ID already exists" });
+        const newUser = {
+            _id: Date.now().toString(), userId,
+            passwordHash: await bcrypt.hash(password, 10),
+            role: "FIELD_OFFICER", accountStatus: "APPROVED",
+            firstName: firstName || "", lastName: lastName || "", email: email || "", ...rest
+        };
+        USERS.push(newUser);
+        const { passwordHash, ...safeUser } = newUser;
+        return res.status(201).json({ success: true, message: "Field officer registered", user: safeUser });
+    } catch (err) { return res.status(500).json({ success: false, message: "Server error" }); }
+});
+
+// POST /api/auth/register-operator (alias — admin only, delegates to register)
+app.post("/api/auth/register-operator", async (req, res) => {
+    try {
+        const decoded = verifyToken(req);
+        if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+        const { userId, password, role, firstName, lastName, email, ...rest } = req.body;
+        if (!userId || !password) return res.status(400).json({ success: false, message: "userId and password are required" });
+        if (USERS.find(u => u.userId === userId)) return res.status(409).json({ success: false, message: "User ID already exists" });
+        const newUser = {
+            _id: Date.now().toString(), userId,
+            passwordHash: await bcrypt.hash(password, 10),
+            role: "VEHICLE_OPERATOR", accountStatus: "APPROVED",
+            firstName: firstName || "", lastName: lastName || "", email: email || "", ...rest
+        };
+        USERS.push(newUser);
+        const { passwordHash, ...safeUser } = newUser;
+        return res.status(201).json({ success: true, message: "Vehicle operator registered", user: safeUser });
+    } catch (err) { return res.status(500).json({ success: false, message: "Server error" }); }
+});
+
+
 // GET /api/auth/users (Admin — list all users)
 app.get("/api/auth/users", (req, res) => {
     const decoded = verifyToken(req);
     if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
     const safe = USERS.map(({ passwordHash, ...u }) => u);
     return res.json({ success: true, users: safe, total: safe.length });
+});
+
+// GET /api/auth/pending — alias for backwards compat
+app.get("/api/auth/pending", (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+    const safe = USERS.map(({ passwordHash, ...u }) => u);
+    return res.json({ success: true, users: safe, data: safe, total: safe.length });
 });
 
 // PATCH /api/auth/users/:userId/approve
@@ -467,6 +518,76 @@ app.get("/api/geocode/reverse", async (req, res) => {
             });
         }).on("error", () => res.json({}));
     } catch { return res.json({}); }
+});
+
+
+
+// ==============================
+// CRITICAL ROADS (Phase 4)
+// ==============================
+
+const path    = require("path");
+const fs      = require("fs");
+const CRITICAL_ROADS_PATH = path.join(__dirname, "..", "risk-engine", "data", "critical_roads.json");
+
+const CRITICAL_ROADS_MOCK = [
+    { id: "Haflong--Dima Hasao HQ", road_name: "SH-5", from_node: "Haflong", to_node: "Dima Hasao HQ", length_km: 15, mid_lat: 25.138, mid_lon: 93.008, from_lat: 25.165, from_lon: 93.017, to_lat: 25.110, to_lon: 92.999, settlements_cutoff: ["Retzol Village", "Dima Hasao HQ Area"], settlement_count: 2, district: "Dima Hasao" },
+    { id: "Silchar--Chhota Kapurchhara", road_name: "Forest Road", from_node: "Silchar", to_node: "Chhota Kapurchhara", length_km: 40, mid_lat: 24.886, mid_lon: 92.824, from_lat: 24.822, from_lon: 92.798, to_lat: 24.950, to_lon: 92.850, settlements_cutoff: ["Chhota Kapurchhara Town"], settlement_count: 1, district: "Cachar" },
+    { id: "Haflong--Jatinga", road_name: "NH-40", from_node: "Haflong", to_node: "Jatinga", length_km: 20, mid_lat: 25.085, mid_lon: 92.959, from_lat: 25.165, from_lon: 93.017, to_lat: 25.005, to_lon: 92.900, settlements_cutoff: ["Jatinga Village"], settlement_count: 1, district: "Dima Hasao" },
+];
+
+app.get("/api/critical-roads", (req, res) => {
+    try {
+        if (fs.existsSync(CRITICAL_ROADS_PATH)) {
+            const data = JSON.parse(fs.readFileSync(CRITICAL_ROADS_PATH, "utf8"));
+            return res.json({ success: true, criticalRoads: data, total: data.length, source: "precomputed" });
+        }
+    } catch (e) {
+        console.warn("Could not read critical_roads.json:", e.message);
+    }
+    return res.json({ success: true, criticalRoads: CRITICAL_ROADS_MOCK, total: CRITICAL_ROADS_MOCK.length, source: "mock" });
+});
+
+
+// ==============================
+// FORECAST RISK (Phase 5 — Open-Meteo)
+// ==============================
+
+const forecastCache = new Map();
+const FORECAST_TTL_MS = 30 * 60 * 1000;
+
+app.get("/api/forecast-risk", async (req, res) => {
+    const { lat, lon } = req.query;
+    if (!lat || !lon) return res.status(400).json({ success: false, message: "lat and lon required" });
+    const cacheKey = `${parseFloat(lat).toFixed(2)},${parseFloat(lon).toFixed(2)}`;
+    const cached = forecastCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+        return res.json({ ...cached.data, cached: true });
+    }
+    try {
+        const https = require("https");
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=rain&forecast_days=1&timezone=Asia%2FKolkata`;
+        https.get(url, { headers: { "User-Agent": "SIH26002-NER-Logistics/1.0" } }, (r) => {
+            let raw = "";
+            r.on("data", c => raw += c);
+            r.on("end", () => {
+                try {
+                    const weather = JSON.parse(raw);
+                    const hourlyRain = weather.hourly?.rain ?? [];
+                    const currentHour = new Date().getHours();
+                    const rain6h  = hourlyRain.slice(currentHour, currentHour + 6).reduce((a, v) => a + (v || 0), 0);
+                    const rain24h = hourlyRain.reduce((a, v) => a + (v || 0), 0);
+                    const toLevel = mm => mm > 20 ? "Very High" : mm > 10 ? "High" : mm > 5 ? "Moderate" : "Low";
+                    const riskNow = toLevel(rain6h); const risk24 = toLevel(rain24h);
+                    const levels = ["Low","Moderate","High","Very High"];
+                    const trend = levels.indexOf(risk24) > levels.indexOf(riskNow) ? "rising" : levels.indexOf(risk24) < levels.indexOf(riskNow) ? "falling" : "stable";
+                    const payload = { success: true, lat: parseFloat(lat), lon: parseFloat(lon), current_risk: riskNow, forecast_6h: riskNow, forecast_24h: risk24, rainfall_6h_mm: rain6h.toFixed(1), rainfall_24h_mm: rain24h.toFixed(1), trend, cached: false };
+                    forecastCache.set(cacheKey, { data: payload, expiresAt: Date.now() + FORECAST_TTL_MS });
+                    return res.json(payload);
+                } catch { return res.json({ success: true, current_risk: "Moderate", forecast_6h: "Moderate", forecast_24h: "Moderate", trend: "stable", cached: false }); }
+            });
+        }).on("error", () => res.json({ success: true, current_risk: "Moderate", forecast_6h: "Moderate", forecast_24h: "Moderate", trend: "stable", cached: false }));
+    } catch { return res.json({ success: true, current_risk: "Moderate", forecast_6h: "Moderate", forecast_24h: "Moderate", trend: "stable", cached: false }); }
 });
 
 
