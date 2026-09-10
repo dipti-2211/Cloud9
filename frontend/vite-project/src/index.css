@@ -1,126 +1,104 @@
 /* ==========================================================================
-   SIH26002 — Light Sky-Blue / White Theme
-   Replaces the dark-navy theme across all app pages.
-   Login page uses its own scoped .sih-* classes and is unaffected.
+   Cloud9 — Blue & White Theme  (clean, no dark mode, no black)
    ========================================================================== */
 
-/* ── Design tokens ─────────────────────────────────────────────────────────── */
+/* ── Design tokens ────────────────────────────────────────────────────────── */
 :root {
-  /* Force light color scheme — prevent OS dark mode from overriding our theme */
   color-scheme: light only;
 
-  /* Brand palette */
+  /* Brand blues */
   --sky:        #2C8FD1;
   --sky-dark:   #1E6FA8;
   --sky-tint:   #EAF4FC;
   --sky-tint-2: #D6EAF9;
-  --ink:        #14263B;
-  --slate:      #5C7288;
-  --slate-soft: #94A6B8;
-  --line:       #E4ECF3;
+
+  /* Text — blue-toned, never black */
+  --ink:        #1A3A5C;      /* deep blue, replaces #14263B  */
+  --slate:      #4A6A8A;      /* medium blue-grey             */
+  --slate-soft: #8AAAC8;      /* light blue-grey placeholder  */
+
+  /* Borders & lines */
+  --line:       #D6EAF9;
   --white:      #FFFFFF;
 
-  /* Status colors */
-  --risk-low:      #1A9E5C;
-  --risk-moderate: #C97B1A;
-  --risk-high:     #D63040;
+  /* Page background */
+  --bg:         #F0F6FB;
+
+  /* Status */
+  --success:    #1A9E5C;
+  --success-bg: rgba(26, 158, 92,  0.10);
+  --warning:    #B8660A;
+  --warning-bg: rgba(184, 102, 10, 0.10);
+  --danger:     #C82030;
+  --danger-bg:  rgba(200, 32, 48,  0.10);
+  --info:       var(--sky);
+  --info-bg:    var(--sky-tint);
 
   /* Legacy aliases */
-  --bg-primary:        #F0F6FB;
-  --bg-secondary:      var(--white);
-  --surface:           var(--white);
-  --surface-elevated:  var(--sky-tint);
-  --border:            var(--line);
+  --bg-primary:       var(--bg);
+  --bg-secondary:     var(--white);
+  --surface:          var(--white);
+  --surface-elevated: var(--sky-tint);
+  --border:           var(--line);
+  --text-primary:     var(--ink);
+  --text-secondary:   var(--slate);
+  --accent:           var(--sky);
+  --accent-hover:     var(--sky-dark);
+  --surface-hover:    var(--sky-tint);
 
-  --text-primary:      var(--ink);
-  --text-secondary:    var(--slate);
-
-  --accent:            var(--sky);
-  --accent-hover:      var(--sky-dark);
-
-  --success:           var(--risk-low);
-  --success-bg:        rgba(26, 158, 92,  0.10);
-  --warning:           var(--risk-moderate);
-  --warning-bg:        rgba(201, 123, 26, 0.10);
-  --danger:            var(--risk-high);
-  --danger-bg:         rgba(214, 48, 64,  0.10);
-  --info:              var(--sky);
-  --info-bg:           var(--sky-tint);
+  --risk-low:      var(--success);
+  --risk-moderate: var(--warning);
+  --risk-high:     var(--danger);
 
   --sidebar-width:  220px;
   --header-height:  56px;
-  --surface-hover:  var(--sky-tint);
 }
 
-/* ── Reset ─────────────────────────────────────────────────────────────────── */
-* { box-sizing: border-box; margin: 0; padding: 0; }
+/* ── Reset ────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   FORCE LIGHT THEME — Permanently override macOS/Chrome forced dark mode.
-   Chrome's auto-dark-mode inverts colors even when our CSS is correct.
-   The solution: declare color-scheme:light on :root so Chrome's algorithm
-   skips this document, then re-apply all light colors in the dark media query.
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-:root {
-  color-scheme: light !important;
-  supported-color-schemes: light;
-}
-
+/* ── Base — force light, blue-white only ─────────────────────────────────── */
 html {
   color-scheme: light !important;
   background-color: #F0F6FB !important;
-  /* Disable Chrome's forced dark mode filter on the root element */
+  /* Block Chrome/Edge "Force Dark Mode" flag from inverting this page */
   -webkit-filter: none !important;
   filter: none !important;
 }
 
 html, body {
   font-family: -apple-system, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
-  background-color: #F0F6FB !important;
-  color: #14263B !important;
+  background-color: var(--bg) !important;
+  color: var(--ink) !important;
   -webkit-font-smoothing: antialiased;
-  color-scheme: light !important;
+  forced-color-adjust: none;
 }
 
 #root {
-  background-color: #F0F6FB !important;
-  color: #14263B !important;
+  background-color: var(--bg) !important;
+  color: var(--ink) !important;
   min-height: 100vh;
 }
 
-/* Override Chrome's forced dark mode — reapply all light colors when OS is dark */
+/* Override OS dark mode — keep blue-white always */
 @media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: light !important;
-    background-color: #F0F6FB !important;
-    color: #14263B !important;
-  }
-  html {
-    background-color: #F0F6FB !important;
-    -webkit-filter: none !important;
-    filter: none !important;
-  }
-  html, body, #root {
-    background-color: #F0F6FB !important;
-    color: #14263B !important;
-  }
-  .app-container  { background-color: #F0F6FB !important; }
-  .sidebar        { background-color: #EAF4FC !important; border-right-color: #D6EAF9 !important; }
-  .sidebar-header { background-color: #EAF4FC !important; border-bottom-color: #D6EAF9 !important; }
-  .top-navbar     { background-color: #EAF4FC !important; border-bottom-color: #D6EAF9 !important; color: #14263B !important; }
-  .page-content   { background-color: #F0F6FB !important; color: #14263B !important; }
-  .card           { background-color: #FFFFFF !important; border-color: #E4ECF3 !important; color: #14263B !important; }
-  .nav-item       { color: #5C7288 !important; background-color: transparent !important; }
-  .nav-item:hover { background-color: #D6EAF9 !important; color: #1E6FA8 !important; }
-  .nav-item.active { background-color: #D6EAF9 !important; color: #1E6FA8 !important; border-right-color: #2C8FD1 !important; }
-  .form-control   { background-color: #FFFFFF !important; border-color: #E4ECF3 !important; color: #14263B !important; }
-  .btn-primary    { background-color: #2C8FD1 !important; color: #FFFFFF !important; }
-  .btn-secondary  { background-color: #FFFFFF !important; color: #14263B !important; border-color: #E4ECF3 !important; }
-  .modal-content  { background-color: #FFFFFF !important; border-color: #E4ECF3 !important; color: #14263B !important; }
-  table, thead, tbody, tr, th, td { background-color: #FFFFFF !important; color: #14263B !important; }
-  th { background-color: #EAF4FC !important; color: #5C7288 !important; }
-  tr:hover td { background-color: #EAF4FC !important; }
+  html, body, #root        { background-color: var(--bg)    !important; color: var(--ink) !important; }
+  .app-container           { background-color: var(--bg)    !important; }
+  .sidebar                 { background-color: var(--sky-tint) !important; border-right-color: var(--line) !important; }
+  .sidebar-header          { background-color: var(--sky-tint) !important; border-bottom-color: var(--line) !important; }
+  .top-navbar              { background-color: var(--sky-tint) !important; border-bottom-color: var(--line) !important; color: var(--ink) !important; }
+  .page-content            { background-color: var(--bg)    !important; color: var(--ink) !important; }
+  .card                    { background-color: var(--white) !important; border-color: var(--line) !important; color: var(--ink) !important; }
+  .nav-item                { color: var(--slate) !important; background-color: transparent !important; }
+  .nav-item:hover          { background-color: var(--sky-tint-2) !important; color: var(--sky-dark) !important; }
+  .nav-item.active         { background-color: var(--sky-tint-2) !important; color: var(--sky-dark) !important; }
+  .form-control            { background-color: var(--white) !important; border-color: var(--line) !important; color: var(--ink) !important; }
+  .btn-primary             { background-color: var(--sky)   !important; color: var(--white) !important; }
+  .btn-secondary           { background-color: var(--white) !important; color: var(--ink)   !important; border-color: var(--line) !important; }
+  .modal-content           { background-color: var(--white) !important; border-color: var(--line) !important; color: var(--ink) !important; }
+  table, thead, tbody, tr, th, td { background-color: var(--white) !important; color: var(--ink) !important; }
+  th                       { background-color: var(--sky-tint) !important; color: var(--slate) !important; }
+  tr:hover td              { background-color: var(--sky-tint) !important; }
 }
 
 /* ==========================================================================
@@ -131,14 +109,14 @@ html, body {
   display: flex;
   height: 100vh;
   overflow: hidden;
-  background-color: #F0F6FB !important;
+  background-color: var(--bg);
 }
 
 /* ── Sidebar ── */
 .sidebar {
   width: var(--sidebar-width);
-  background-color: #EAF4FC !important;
-  border-right: 1px solid #D6EAF9 !important;
+  background-color: var(--sky-tint);
+  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   transition: transform 0.3s ease;
@@ -149,10 +127,11 @@ html, body {
   display: flex;
   align-items: center;
   padding: 0 20px;
-  border-bottom: 1px solid #D6EAF9 !important;
-  background-color: #EAF4FC !important;
+  border-bottom: 1px solid var(--line);
+  background-color: var(--sky-tint);
   font-weight: 700;
   letter-spacing: 0.5px;
+  color: var(--ink);
 }
 
 .sidebar-nav {
@@ -165,29 +144,29 @@ html, body {
   display: flex;
   align-items: center;
   padding: 11px 20px;
-  color: #5C7288 !important;
+  color: var(--slate);
   text-decoration: none;
   transition: all 0.15s;
   gap: 12px;
   font-size: 0.9rem;
   font-weight: 500;
   border-right: 3px solid transparent;
-  background-color: transparent !important;
+  background-color: transparent;
 }
 
 .nav-item:hover {
-  background-color: #D6EAF9 !important;
-  color: #1E6FA8 !important;
+  background-color: var(--sky-tint-2);
+  color: var(--sky-dark);
 }
 
 .nav-item.active {
-  background-color: #D6EAF9 !important;
-  color: #1E6FA8 !important;
-  border-right-color: #2C8FD1 !important;
+  background-color: var(--sky-tint-2);
+  color: var(--sky-dark);
+  border-right-color: var(--sky);
   font-weight: 600;
 }
 
-/* ── Top navbar ── */
+/* ── Top Navbar ── */
 .main-content {
   flex: 1;
   display: flex;
@@ -197,21 +176,21 @@ html, body {
 
 .top-navbar {
   height: var(--header-height);
-  background-color: #EAF4FC !important;
-  border-bottom: 1px solid #D6EAF9 !important;
+  background-color: var(--white);
+  border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
-  color: #14263B !important;
+  color: var(--ink);
 }
 
 .page-content {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
-  background-color: #F0F6FB !important;
-  color: #14263B !important;
+  background-color: var(--bg);
+  color: var(--ink);
 }
 
 /* ==========================================================================
@@ -219,12 +198,12 @@ html, body {
    ========================================================================== */
 
 .card {
-  background-color: #FFFFFF !important;
-  border: 1px solid #E4ECF3 !important;
+  background-color: var(--white);
+  border: 1px solid var(--line);
   border-radius: 10px;
   padding: 20px;
-  box-shadow: 0 1px 4px rgba(20, 38, 59, 0.06);
-  color: #14263B !important;
+  box-shadow: 0 1px 4px rgba(44, 143, 209, 0.08);
+  color: var(--ink);
 }
 
 .card-header {
@@ -241,7 +220,7 @@ html, body {
 }
 
 /* ==========================================================================
-   Badges — tinted pills on white backgrounds
+   Badges
    ========================================================================== */
 
 .badge {
@@ -253,26 +232,10 @@ html, body {
   letter-spacing: 0.04em;
   border: 1px solid transparent;
 }
-.badge.success {
-  color: var(--success);
-  background-color: var(--success-bg);
-  border-color: rgba(26, 158, 92, 0.25);
-}
-.badge.warning {
-  color: var(--warning);
-  background-color: var(--warning-bg);
-  border-color: rgba(201, 123, 26, 0.25);
-}
-.badge.danger {
-  color: var(--danger);
-  background-color: var(--danger-bg);
-  border-color: rgba(214, 48, 64, 0.25);
-}
-.badge.info {
-  color: var(--sky-dark);
-  background-color: var(--sky-tint);
-  border-color: var(--sky-tint-2);
-}
+.badge.success { color: var(--success); background-color: var(--success-bg); border-color: rgba(26,158,92,0.25); }
+.badge.warning { color: var(--warning); background-color: var(--warning-bg); border-color: rgba(184,102,10,0.25); }
+.badge.danger  { color: var(--danger);  background-color: var(--danger-bg);  border-color: rgba(200,32,48,0.25); }
+.badge.info    { color: var(--sky-dark); background-color: var(--sky-tint);  border-color: var(--sky-tint-2); }
 
 /* ==========================================================================
    Tables
@@ -285,21 +248,25 @@ table { width: 100%; border-collapse: collapse; }
 th, td {
   padding: 13px 16px;
   text-align: left;
-  border-bottom: 1px solid #E4ECF3 !important;
+  border-bottom: 1px solid var(--line);
 }
 
 th {
-  color: #5C7288 !important;
+  color: var(--slate);
   font-weight: 600;
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  background: #EAF4FC !important;
+  background: var(--sky-tint);
 }
 
-td { font-size: 0.88rem; color: #14263B !important; background-color: #FFFFFF; }
+td {
+  font-size: 0.88rem;
+  color: var(--ink);
+  background-color: var(--white);
+}
 
-tr:hover td { background-color: #EAF4FC !important; }
+tr:hover td { background-color: var(--sky-tint); }
 
 /* ==========================================================================
    Dashboard Grid
@@ -327,10 +294,10 @@ tr:hover td { background-color: #EAF4FC !important; }
   flex-shrink: 0;
 }
 
-.kpi-icon.accent  { background: var(--sky-tint);    color: var(--sky); }
-.kpi-icon.danger  { background: var(--danger-bg);   color: var(--danger); }
-.kpi-icon.warning { background: var(--warning-bg);  color: var(--warning); }
-.kpi-icon.success { background: var(--success-bg);  color: var(--success); }
+.kpi-icon.accent  { background: var(--sky-tint);   color: var(--sky); }
+.kpi-icon.danger  { background: var(--danger-bg);  color: var(--danger); }
+.kpi-icon.warning { background: var(--warning-bg); color: var(--warning); }
+.kpi-icon.success { background: var(--success-bg); color: var(--success); }
 
 .map-section {
   grid-column: span 8;
@@ -375,39 +342,28 @@ tr:hover td { background-color: #EAF4FC !important; }
    Responsive
    ========================================================================== */
 
-/* Tablet: ≤ 1100px */
 @media (max-width: 1100px) {
   :root { --sidebar-width: 190px; }
-
   .map-section  { grid-column: span 12; height: 380px; }
   .side-panel   { grid-column: span 12; max-height: none; flex-direction: row; flex-wrap: wrap; }
   .side-panel > * { flex: 1 1 280px; }
-
   .kpi-row { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
 }
 
-/* Small tablet / large phone: ≤ 860px */
 @media (max-width: 860px) {
-  :root {
-    --sidebar-width: 52px;   /* icon-only */
-    --header-height: 52px;
-  }
-
-  /* Sidebar icon-only mode */
+  :root { --sidebar-width: 52px; --header-height: 52px; }
   .sidebar { overflow: hidden; }
   .sidebar-header { padding: 0 14px; justify-content: center; }
-  .sidebar-header > div { display: none; }   /* hide wordmark */
+  .sidebar-header > div { display: none; }
   .nav-item span { display: none; }
   .nav-item { padding: 12px; justify-content: center; gap: 0; border-right: none; }
   .nav-item.active, .nav-item:hover { border-right: none; border-left: 3px solid var(--sky); }
-
   .kpi-row { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .map-section { height: 300px; }
   .page-content { padding: 14px; }
   .top-navbar { padding: 0 14px; gap: 12px; }
 }
 
-/* Mobile: ≤ 600px */
 @media (max-width: 600px) {
   :root { --sidebar-width: 0px; --header-height: 48px; }
   .sidebar { display: none; }
@@ -417,7 +373,20 @@ tr:hover td { background-color: #EAF4FC !important; }
   .card { padding: 14px; }
 }
 
-/* Utility: hide on small screens */
+/* Route Planner — responsive grid */
+.route-planner-grid {
+  display: grid;
+  grid-template-columns: 1fr 370px;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 768px) {
+  .route-planner-grid { grid-template-columns: 1fr; grid-template-rows: 55vw auto; }
+  .route-planner-grid .map-card { min-height: 320px; height: 55vw; }
+}
+
 .hide-sm { display: inline; }
 @media (max-width: 860px) { .hide-sm { display: none; } }
 
@@ -431,29 +400,29 @@ tr:hover td { background-color: #EAF4FC !important; }
   display: block;
   font-size: 0.82rem;
   font-weight: 600;
-  color: #14263B !important;
+  color: var(--ink);
   margin-bottom: 6px;
 }
 
 .form-control {
   width: 100%;
   padding: 10px 12px;
-  background-color: #FFFFFF !important;
-  border: 1.5px solid #E4ECF3 !important;
+  background-color: var(--white);
+  border: 1.5px solid var(--line);
   border-radius: 8px;
-  color: #14263B !important;
+  color: var(--ink);
   font-family: inherit;
   font-size: 0.9rem;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.form-control::placeholder { color: #94A6B8 !important; }
+.form-control::placeholder { color: var(--slate-soft); }
 
 .form-control:focus {
   outline: none;
-  border-color: #2C8FD1 !important;
+  border-color: var(--sky);
   box-shadow: 0 0 0 3px rgba(44, 143, 209, 0.15);
-  background-color: #FFFFFF !important;
+  background-color: var(--white);
 }
 
 /* ==========================================================================
@@ -472,22 +441,19 @@ tr:hover td { background-color: #EAF4FC !important; }
 }
 
 .btn-primary {
-  background-color: #2C8FD1 !important;
-  color: #ffffff !important;
+  background-color: var(--sky);
+  color: var(--white);
   border: none;
 }
-.btn-primary:hover  { background-color: #1E6FA8 !important; }
+.btn-primary:hover  { background-color: var(--sky-dark); }
 .btn-primary:active { transform: scale(0.98); }
 
 .btn-secondary {
-  background-color: #FFFFFF !important;
-  color: #14263B !important;
-  border: 1.5px solid #E4ECF3 !important;
+  background-color: var(--white);
+  color: var(--ink);
+  border: 1.5px solid var(--line);
 }
-.btn-secondary:hover {
-  border-color: #2C8FD1 !important;
-  color: #1E6FA8 !important;
-}
+.btn-secondary:hover { border-color: var(--sky); color: var(--sky-dark); }
 
 /* ==========================================================================
    Progress Bar
@@ -513,22 +479,22 @@ tr:hover td { background-color: #EAF4FC !important; }
 
 .modal-overlay {
   position: fixed; inset: 0;
-  background-color: rgba(20, 38, 59, 0.45);
+  background-color: rgba(26, 58, 92, 0.40);
   backdrop-filter: blur(4px);
   display: flex; align-items: center; justify-content: center;
   z-index: 1000;
 }
 
 .modal-content {
-  background-color: #FFFFFF !important;
-  border: 1px solid #E4ECF3 !important;
+  background-color: var(--white);
+  border: 1px solid var(--line);
   border-radius: 12px;
   width: 90%;
   max-width: 500px;
   max-height: 90vh;
   overflow-y: auto;
-  box-shadow: 0 16px 48px rgba(20, 38, 59, 0.16);
-  color: #14263B !important;
+  box-shadow: 0 16px 48px rgba(44, 143, 209, 0.18);
+  color: var(--ink);
 }
 
 .modal-header {
@@ -550,38 +516,36 @@ tr:hover td { background-color: #EAF4FC !important; }
 }
 
 /* ==========================================================================
-   Leaflet Map Overrides (light tile-friendly)
+   Leaflet Map
    ========================================================================== */
 
 .leaflet-container {
   width: 100%; height: 100%;
   border-radius: 8px;
   z-index: 10;
-  background-color: var(--sky-tint) !important;
+  background-color: var(--sky-tint);
 }
 
 .leaflet-popup-content-wrapper {
-  background-color: var(--white) !important;
-  color: var(--ink) !important;
+  background-color: var(--white);
+  color: var(--ink);
   border: 1px solid var(--line);
-  border-radius: 8px !important;
-  box-shadow: 0 4px 20px rgba(20,38,59,0.14) !important;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(44,143,209,0.14);
 }
 
-.leaflet-popup-tip { background-color: var(--white) !important; }
+.leaflet-popup-tip { background-color: var(--white); }
 
 .leaflet-control-zoom a {
-  background-color: var(--white) !important;
-  color: var(--ink) !important;
-  border-color: var(--line) !important;
+  background-color: var(--white);
+  color: var(--ink);
+  border-color: var(--line);
 }
 
-.leaflet-control-zoom a:hover {
-  background-color: var(--sky-tint) !important;
-}
+.leaflet-control-zoom a:hover { background-color: var(--sky-tint); }
 
 /* ==========================================================================
-   Map Markers (keep hue; ensure visibility on light tiles)
+   Map Markers
    ========================================================================== */
 
 .vehicle-marker {
@@ -595,79 +559,57 @@ tr:hover td { background-color: #EAF4FC !important; }
   background-color: var(--danger);
   border: 2px solid #fff;
   border-radius: 50%;
-  box-shadow: 0 0 10px rgba(214,48,64,0.55);
+  box-shadow: 0 0 10px rgba(200,32,48,0.55);
   animation: pulse-danger 2s infinite;
 }
 
 @keyframes pulse-danger {
-  0%   { box-shadow: 0 0 0 0   rgba(214, 48, 64, 0.7); }
-  70%  { box-shadow: 0 0 0 12px rgba(214, 48, 64, 0);   }
-  100% { box-shadow: 0 0 0 0   rgba(214, 48, 64, 0);   }
+  0%   { box-shadow: 0 0 0 0    rgba(200, 32, 48, 0.7); }
+  70%  { box-shadow: 0 0 0 12px rgba(200, 32, 48, 0);   }
+  100% { box-shadow: 0 0 0 0    rgba(200, 32, 48, 0);   }
 }
 
-/* Risk prediction markers */
 .risk-marker { border: 2px solid rgba(255,255,255,0.9); border-radius: 50%; }
-
-.risk-marker-low {
-  background-color: var(--risk-low);
-  box-shadow: 0 0 8px rgba(26,158,92,0.45);
-}
-
-.risk-marker-moderate {
-  background-color: var(--risk-moderate);
-  box-shadow: 0 0 8px rgba(201,123,26,0.45);
-}
-
-.risk-marker-high {
-  background-color: var(--risk-high);
-  box-shadow: 0 0 10px rgba(214,48,64,0.5);
-  animation: pulse-danger 2s infinite;
-}
-
-.risk-marker-loading {
-  background-color: var(--slate-soft);
-  animation: risk-loading-pulse 1s ease-in-out infinite;
-}
+.risk-marker-low      { background-color: var(--risk-low);      box-shadow: 0 0 8px rgba(26,158,92,0.45); }
+.risk-marker-moderate { background-color: var(--risk-moderate); box-shadow: 0 0 8px rgba(184,102,10,0.45); }
+.risk-marker-high     { background-color: var(--risk-high);     box-shadow: 0 0 10px rgba(200,32,48,0.5); animation: pulse-danger 2s infinite; }
+.risk-marker-loading  { background-color: var(--slate-soft);    animation: risk-loading-pulse 1s ease-in-out infinite; }
 
 @keyframes risk-loading-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%       { opacity: 0.4; transform: scale(0.8); }
 }
 
-/* User "You Are Here" marker */
+/* User "You Are Here" dot */
 .user-location-marker {
-  background-color: #2563eb;
+  background-color: var(--sky);
   border: 3px solid #fff;
   border-radius: 50%;
-  box-shadow: 0 0 0 0 rgba(37,99,235,0.6);
+  box-shadow: 0 0 0 0 rgba(44,143,209,0.6);
   animation: pulse-user-location 2s infinite;
 }
 
 @keyframes pulse-user-location {
-  0%   { box-shadow: 0 0 0 0    rgba(37,99,235,0.6); }
-  70%  { box-shadow: 0 0 0 14px rgba(37,99,235,0); }
-  100% { box-shadow: 0 0 0 0    rgba(37,99,235,0); }
+  0%   { box-shadow: 0 0 0 0    rgba(44,143,209,0.6); }
+  70%  { box-shadow: 0 0 0 14px rgba(44,143,209,0); }
+  100% { box-shadow: 0 0 0 0    rgba(44,143,209,0); }
 }
 
-/* Demo location pins */
 .demo-pin {
   width: 22px; height: 22px;
   border-radius: 50% 50% 50% 0;
   transform: rotate(-45deg);
   border: 2px solid #fff;
-  box-shadow: 0 2px 8px rgba(20,38,59,0.3);
+  box-shadow: 0 2px 8px rgba(44,143,209,0.3);
   transition: transform 0.15s, box-shadow 0.15s;
   cursor: pointer;
 }
-.demo-pin:hover {
-  transform: rotate(-45deg) scale(1.25);
-  box-shadow: 0 4px 14px rgba(20,38,59,0.4);
-}
+.demo-pin:hover { transform: rotate(-45deg) scale(1.25); box-shadow: 0 4px 14px rgba(44,143,209,0.4); }
 .demo-pin-high { background-color: var(--risk-high); }
 .demo-pin-low  { background-color: var(--risk-low);  }
 
 /* ==========================================================================
-   Location Banner (Dashboard top strip)
+   Location Banner
    ========================================================================== */
 
 .location-banner {
@@ -684,20 +626,20 @@ tr:hover td { background-color: #EAF4FC !important; }
 
 .location-banner-loading {
   color: var(--slate);
-  animation: shimmer 1.5s infinite;
   background: linear-gradient(90deg, var(--sky-tint) 25%, var(--white) 50%, var(--sky-tint) 75%);
   background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
 }
 
 .location-banner-denied  { border-color: var(--warning); background: var(--warning-bg); color: var(--ink); }
 .location-banner-granted { border-color: var(--success); background: var(--success-bg); color: var(--ink); }
 
 /* ==========================================================================
-   Skeleton Shimmer
+   Skeleton shimmer
    ========================================================================== */
 
 .skeleton {
-  background: linear-gradient(90deg, var(--sky-tint) 25%, #fff 50%, var(--sky-tint) 75%);
+  background: linear-gradient(90deg, var(--sky-tint) 25%, var(--white) 50%, var(--sky-tint) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: 4px;
@@ -709,7 +651,7 @@ tr:hover td { background-color: #EAF4FC !important; }
 }
 
 /* ==========================================================================
-   Glassmorphism (Route Planner right panel over map)
+   Glass panel
    ========================================================================== */
 
 .glass-panel {
@@ -720,12 +662,12 @@ tr:hover td { background-color: #EAF4FC !important; }
 }
 
 /* ==========================================================================
-   Slide-out Drawer
+   Drawer
    ========================================================================== */
 
 .drawer-overlay {
   position: fixed; inset: 0;
-  background: rgba(20,38,59,0.35);
+  background: rgba(26, 58, 92, 0.30);
   backdrop-filter: blur(2px);
   z-index: 2000;
   opacity: 0; visibility: hidden;
@@ -739,7 +681,7 @@ tr:hover td { background-color: #EAF4FC !important; }
   width: 400px; height: 100vh;
   background-color: var(--white);
   border-left: 1px solid var(--line);
-  box-shadow: -8px 0 24px rgba(20,38,59,0.12);
+  box-shadow: -8px 0 24px rgba(44,143,209,0.12);
   z-index: 2001;
   transition: right 0.3s cubic-bezier(0.4,0,0.2,1);
   display: flex; flex-direction: column;
@@ -751,12 +693,12 @@ tr:hover td { background-color: #EAF4FC !important; }
    ========================================================================== */
 
 .row-critical {
-  background: linear-gradient(90deg, rgba(214,48,64,0.04) 0%, transparent 100%);
+  background: linear-gradient(90deg, rgba(200,32,48,0.04) 0%, transparent 100%);
   border-left: 3px solid var(--danger);
 }
 
 /* ==========================================================================
-   Route Planner (right side panel over map)
+   Route Panel
    ========================================================================== */
 
 .route-panel-toggle {
@@ -771,21 +713,17 @@ tr:hover td { background-color: #EAF4FC !important; }
   font-size: 0.85rem; font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
-  box-shadow: 0 2px 8px rgba(20,38,59,0.1);
+  box-shadow: 0 2px 8px rgba(44,143,209,0.10);
 }
 
-.route-panel-toggle:hover {
-  background: var(--sky-tint);
-  border-color: var(--sky);
-  color: var(--sky-dark);
-}
+.route-panel-toggle:hover { background: var(--sky-tint); border-color: var(--sky); color: var(--sky-dark); }
 
 .route-panel {
   border-radius: 10px;
   overflow: hidden;
   max-height: 480px;
   overflow-y: auto;
-  box-shadow: 0 4px 24px rgba(20,38,59,0.14);
+  box-shadow: 0 4px 24px rgba(44,143,209,0.14);
 }
 
 .route-panel-header {
@@ -805,15 +743,9 @@ tr:hover td { background-color: #EAF4FC !important; }
 }
 .route-panel-close:hover { color: var(--ink); }
 
-.route-search-row {
-  display: flex; gap: 8px;
-  padding: 8px 12px; align-items: center;
-}
+.route-search-row { display: flex; gap: 8px; padding: 8px 12px; align-items: center; }
 
-.route-cards {
-  display: flex; flex-direction: column;
-  gap: 6px; padding: 4px 12px 10px;
-}
+.route-cards { display: flex; flex-direction: column; gap: 6px; padding: 4px 12px 10px; }
 
 .route-card {
   padding: 10px 12px;
@@ -824,12 +756,12 @@ tr:hover td { background-color: #EAF4FC !important; }
   transition: all 0.15s;
   color: var(--ink);
 }
-.route-card:hover { border-color: var(--sky); background: var(--sky-tint); }
+.route-card:hover       { border-color: var(--sky); background: var(--sky-tint); }
 .route-card.recommended { border-color: var(--success); background: var(--success-bg); }
 .route-card.selected    { border-color: var(--sky);     background: var(--sky-tint); }
 
 /* ==========================================================================
-   Shared animations
+   Animations
    ========================================================================== */
 
 .spin { animation: spin-anim 0.8s linear infinite; }
@@ -839,15 +771,14 @@ tr:hover td { background-color: #EAF4FC !important; }
   to   { transform: rotate(360deg); }
 }
 
-@keyframes popoverFadeIn {
-  from { opacity: 0; transform: translateY(-6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-/* Alias for inline style animation: 'spin 1s linear infinite' */
 @keyframes spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
+}
+
+@keyframes popoverFadeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes fadeInDown {

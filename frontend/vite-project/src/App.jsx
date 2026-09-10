@@ -15,6 +15,7 @@ import { RegisterVehicleOperator } from './pages/RegisterVehicleOperator';
 import { AccountDetails } from './pages/AccountDetails';
 import { AdminApprovals } from './pages/AdminApprovals';
 import { Districts } from './pages/Districts';
+import { CriticalRoads } from './pages/CriticalRoads';
 import { auth } from './services/api';
 import { LanguageProvider } from './i18n/LanguageContext';
 
@@ -26,6 +27,13 @@ const ProtectedRoute = ({ children }) => {
 // Public route — redirects to /dashboard if already logged in
 const PublicRoute = ({ children }) => {
   return auth.isLoggedIn() ? <Navigate to="/dashboard" replace /> : children;
+};
+
+// Admin-only route — redirects to /dashboard for non-admins
+const AdminRoute = ({ children }) => {
+  if (!auth.isLoggedIn()) return <Navigate to="/login" replace />;
+  const user = auth.getUser();
+  return user?.role === 'ADMIN' ? children : <Navigate to="/dashboard" replace />;
 };
 
 function App() {
@@ -57,12 +65,14 @@ function App() {
             <Route path="route-planner"      element={<RoutePlanner />} />
             <Route path="districts"          element={<Districts />} />
             <Route path="settings"           element={<Settings />} />
-            {/* Personnel */}
-            <Route path="register-officer"   element={<RegisterFieldOfficer />} />
-            <Route path="register-operator"  element={<RegisterVehicleOperator />} />
+            {/* Personnel — admin creates accounts */}
+            <Route path="register-officer"   element={<AdminRoute><RegisterFieldOfficer /></AdminRoute>} />
+            <Route path="register-operator"  element={<AdminRoute><RegisterVehicleOperator /></AdminRoute>} />
             <Route path="account"            element={<AccountDetails />} />
             {/* Admin only */}
             <Route path="admin/approvals"    element={<AdminApprovals />} />
+            {/* Phase 4: Critical roads analysis */}
+            <Route path="critical-roads"     element={<CriticalRoads />} />
           </Route>
 
           {/* Catch-all */}

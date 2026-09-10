@@ -6,7 +6,7 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Truck, Route, AlertTriangle, Package,
-  Bell, Settings, Navigation, UserPlus, Car, KeyRound, ShieldCheck, MapPin,
+  Bell, Settings, Navigation, UserPlus, Car, KeyRound, ShieldCheck, MapPin, AlertOctagon,
 } from 'lucide-react';
 import { auth } from '../../services/api';
 
@@ -29,28 +29,25 @@ export const Sidebar = () => {
   const isAdmin = role === 'ADMIN';
 
   const mainItems = [
-    { path:'/dashboard',     label:'Dashboard',     icon:LayoutDashboard },
-    { path:'/districts',     label:'Districts',     icon:MapPin },
-    { path:'/vehicles',      label:'Vehicles',      icon:Truck },
-    { path:'/roads',         label:'Roads',         icon:Route },
-    { path:'/incidents',     label:'Incidents',     icon:AlertTriangle },
-    { path:'/deliveries',    label:'Deliveries',    icon:Package },
-    { path:'/alerts',        label:'Alerts',        icon:Bell },
-    { path:'/route-planner', label:'Route Planner', icon:Navigation },
+    { path:'/dashboard',      label:'Dashboard',       icon:LayoutDashboard },
+    { path:'/districts',      label:'Districts',       icon:MapPin },
+    { path:'/vehicles',       label:'Vehicles',        icon:Truck },
+    { path:'/roads',          label:'Roads',           icon:Route },
+    { path:'/incidents',      label:'Incidents',       icon:AlertTriangle },
+    { path:'/deliveries',     label:'Deliveries',      icon:Package },
+    { path:'/alerts',         label:'Alerts',          icon:Bell },
+    { path:'/route-planner',  label:'Route Planner',   icon:Navigation },
+    { path:'/critical-roads', label:'Critical Roads',  icon:AlertOctagon },
   ];
 
   // Admin sees: Register Officer + Register Operator + Admin Approvals
-  // Others see: only Register (their own type) + Account
+  // Other roles see: only Account (no self-registration links)
   const personnelItems = isAdmin ? [
     { path:'/register-officer',  label:'Register Officer',  icon:UserPlus },
     { path:'/register-operator', label:'Register Operator', icon:Car },
     { path:'/account',           label:'Account',           icon:KeyRound },
-  ] : role === 'FIELD_OFFICER' ? [
-    { path:'/register-officer',  label:'Register Officer',  icon:UserPlus },
-    { path:'/account',           label:'Account',           icon:KeyRound },
   ] : [
-    { path:'/register-operator', label:'Register Operator', icon:Car },
-    { path:'/account',           label:'Account',           icon:KeyRound },
+    { path:'/account', label:'Account', icon:KeyRound },
   ];
 
   const systemItems = [

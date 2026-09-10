@@ -1,13 +1,37 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="background:#F0F6FB;color:#1A3A5C;">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light only" />
+    <!-- Block Chrome/Edge auto dark mode completely -->
+    <meta name="color-scheme" content="light" />
+    <meta name="supported-color-schemes" content="light" />
     <title>SIH26002 · Logistics Intelligence</title>
+    <style>
+      /* Hardcoded literal hex — runs before Chrome's auto-dark algorithm,
+         prevents it from inverting CSS variables */
+      html, body, #root {
+        background-color: #F0F6FB !important;
+        color: #1A3A5C !important;
+        -webkit-filter: none !important;
+        filter: none !important;
+        color-scheme: light !important;
+      }
+      .app-container  { background-color: #F0F6FB !important; }
+      .sidebar        { background-color: #EAF4FC !important; }
+      .sidebar-header { background-color: #EAF4FC !important; }
+      .top-navbar     { background-color: #FFFFFF !important; color: #1A3A5C !important; }
+      .main-content   { background-color: #F0F6FB !important; }
+      .page-content   { background-color: #F0F6FB !important; color: #1A3A5C !important; }
+      .card           { background-color: #FFFFFF !important; color: #1A3A5C !important; }
+      .nav-item       { color: #4A6A8A !important; }
+      .nav-item.active, .nav-item:hover { background-color: #D6EAF9 !important; color: #1E6FA8 !important; }
+      table, td       { background-color: #FFFFFF !important; color: #1A3A5C !important; }
+      th              { background-color: #EAF4FC !important; color: #4A6A8A !important; }
+    </style>
   </head>
-  <body>
+  <body style="background:#F0F6FB;color:#1A3A5C;">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

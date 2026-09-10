@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { vehiclesAPI } from "../services/api";
 
 function VehicleForm({ onVehicleCreated }) {
   const [formData, setFormData] = useState({
@@ -31,38 +32,23 @@ function VehicleForm({ onVehicleCreated }) {
     setError("");
 
     try {
-      const response = await fetch(
-        "http://localhost:1710/api/vehicles",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            vehicleNumber: formData.vehicleNumber,
-            vehicleType: formData.vehicleType,
-            cargoType: formData.cargoType,
-            priority: formData.priority,
-            status: formData.status,
-            destination: formData.destination,
-            currentLocation: {
-              type: "Point",
-              coordinates: [
-                Number(formData.longitude),
-                Number(formData.latitude)
-              ]
-            }
-          })
+      const result = await vehiclesAPI.create({
+        vehicleNumber: formData.vehicleNumber,
+        vehicleType: formData.vehicleType,
+        cargoType: formData.cargoType,
+        priority: formData.priority,
+        status: formData.status,
+        destination: formData.destination,
+        currentLocation: {
+          type: "Point",
+          coordinates: [
+            Number(formData.longitude),
+            Number(formData.latitude)
+          ]
         }
-      );
+      });
 
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.message || "Failed to create vehicle");
-      }
-
-      onVehicleCreated(result.data);
+      onVehicleCreated(result.vehicle ?? result.data ?? result);
 
       setFormData({
         vehicleNumber: "",
