@@ -68,14 +68,19 @@ export const RegisterVehicleOperator = () => {
     e.preventDefault();
     if (!validate()) { toast.error('Please fill all required fields.'); return; }
     try {
-      await authAPI.register({ ...form, role: 'Vehicle Operator' });
+      await authAPI.register({
+        ...form,
+        role: 'Vehicle Operator',
+        dateOfBirth: form.dob || undefined,  // map dob → dateOfBirth for backend schema
+        gender: form.gender || undefined,
+      });
       const person = { ...form, id: form.userId };
       if (editMode) {
         setRecords(r => r.map(p => p.id === person.id ? person : p));
         toast.success('Record updated.');
       } else {
         setRecords(r => [...r, person]);
-        toast.success('Vehicle operator registered. Awaiting admin approval.');
+        toast.success('Vehicle operator registered successfully.');
       }
       setSubmitted(person);
       setEditMode(false);

@@ -143,14 +143,64 @@ export const authAPI = {
   // Admin: PATCH /api/auth/users/:id/approve|reject
   approve: (id) => request(`/api/auth/users/${id}/approve`, { method: 'PATCH' }),
   reject:  (id) => request(`/api/auth/users/${id}/reject`,  { method: 'PATCH' }),
+
+  // Admin: upload profile photo
+  uploadPhoto: async (userId, file) => {
+    const token = auth.getToken();
+    const formData = new FormData();
+    formData.append('photo', file);
+    const res = await fetch(`/api/auth/users/${userId}/photo`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || 'Photo upload failed');
+    return data;
+  },
 };
 
 // ─── Vehicles ────────────────────────────────────────────────────────────────
 // Backend → { success, vehicles:[...], total }
 export const vehiclesAPI = {
   getAll: async () => {
-    const data = await request('/api/vehicles');
-    return data.vehicles?.length ? data.vehicles : mockVehicles;
+    try {
+      const data = await request('/api/vehicles');
+      const list = data.vehicles || data.data;
+      if (Array.isArray(list) && list.length) {
+        return list.map(v => {
+          const coords = v.currentLocation?.coordinates;
+          const pos = coords ? [coords[1], coords[0]] : (v.position || [26.1445, 91.7362]);
+          const waypoints = v.routeWaypoints || v.route || [];
+          return {
+            id: v.vehicleNumber || v.id || v.registrationNumber,
+            vehicleId: v.vehicleNumber || v.id,
+            vehicleNumber: v.vehicleNumber || v.id,
+            registrationNumber: v.vehicleNumber || v.id,
+            type: v.vehicleType || v.type || 'TRUCK',
+            cargo: v.cargoType || v.cargo || 'Supplies',
+            cargoType: v.cargoType || v.cargo || 'Supplies',
+            priority: v.priority || 'MEDIUM',
+            status: (v.status || 'IN_TRANSIT').replace('_', ' '),
+            source: v.source || '',
+            destination: v.destination || '',
+            eta: v.eta || '3h 30m',
+            speed: v.speed ?? 42,
+            position: pos,
+            route: waypoints,
+            routeWaypoints: waypoints,
+            routeProgress: v.routeProgress ?? 0.4,
+            delayReason: v.delayReason,
+            delayMinutes: v.delayMinutes,
+            driver: v.driver ?? 'Assigned Operator',
+            _id: v._id,
+          };
+        });
+      }
+      return mockVehicles;
+    } catch {
+      return mockVehicles;
+    }
   },
   create: (payload) => request('/api/vehicles',       { method: 'POST',   body: JSON.stringify(payload) }),
   update: (id, p)   => request(`/api/vehicles/${id}`, { method: 'PATCH',  body: JSON.stringify(p) }),

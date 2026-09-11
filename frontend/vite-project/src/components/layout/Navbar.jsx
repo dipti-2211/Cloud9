@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { api, auth, authAPI } from '../../services/api';
 import { useLang } from '../../i18n/LanguageContext';
+import { useSocket } from '../../hooks/useSocket';
 
 // ── Notification dropdown ─────────────────────────────────────────────────
 const NotificationPanel = ({ onClose }) => {
@@ -121,18 +122,31 @@ export const Navbar = () => {
   const userRef = useRef(null);
   const { lang, setLang } = useLang();
 
+  const { socket } = useSocket();
   const user = auth.getUser();
   const isAdmin = user?.role === 'ADMIN';
-  const displayName = user ? `${user.firstName} ${user.lastName}` : 'User';
+  const displayName = user?.name || (user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : user?.firstName || user?.userId || 'Administrator');
   const roleLabel = { ADMIN:'Admin', FIELD_OFFICER:'Field Officer', VEHICLE_OPERATOR:'Vehicle Operator' }[user?.role] ?? user?.role ?? 'User';
 
-  // Poll alert count every 30 s
+  // Poll alert count every 30 s + instant socket refresh
   useEffect(() => {
     const load = () => api.getAlerts().then(d => setAlertCount(d.length)).catch(() => {});
     load();
     const id = setInterval(load, 30000);
-    return () => clearInterval(id);
-  }, []);
+
+    const s = socket.current;
+    if (s) {
+      s.on('alert_created', load);
+      s.on('incident_created', load);
+    }
+    return () => {
+      clearInterval(id);
+      if (s) {
+        s.off('alert_created', load);
+        s.off('incident_created', load);
+      }
+    };
+  }, [socket]);
 
   // Close on outside click
   useEffect(() => {

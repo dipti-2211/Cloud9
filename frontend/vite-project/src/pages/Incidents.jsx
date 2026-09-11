@@ -17,9 +17,12 @@ import { Modal } from '../components/common/Modal';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList
 } from 'recharts';
+import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import toast from 'react-hot-toast';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Camera, X, MapPin, Loader, RefreshCw } from 'lucide-react';
+import { Camera, X, MapPin, Loader, RefreshCw, Eye } from 'lucide-react';
 import { useUserLocation } from '../hooks/useUserLocation';
 import { reverseGeocode, incidentsAPI } from '../services/api';
 import { useLang } from '../i18n/LanguageContext';
@@ -58,6 +61,7 @@ const formatLiveIncident = (item) => {
   return {
     id: shortId,
     rawId: item._id || item.id,
+    officerName: item.field_officer_name || item.reportedBy || 'Field Officer',
     type: displayType,
     cause: cause,
     location: location,
@@ -69,6 +73,10 @@ const formatLiveIncident = (item) => {
     roadBlock: item.road_block,
     trafficCondition: item.traffic_condition,
     description: item.description,
+    slope: item.slope ?? item.slope_deg,
+    rainfall: item.rainfall_mm,
+    lat: item.location?.coordinates?.[1] ?? item.latitude ?? null,
+    lon: item.location?.coordinates?.[0] ?? item.longitude ?? null,
   };
 };
 
@@ -100,10 +108,124 @@ const CAUSE_COLORS = {
 };
 const DEFAULT_COLOR = '#64748b';
 
+// Hazard icon for incident map
+const hazardIcon = L.divIcon({
+  className: '',
+  iconSize: [36, 36],
+  iconAnchor: [18, 18],
+  html: `<div style="
+    width:36px;height:36px;border-radius:50%;
+    background:rgba(239,68,68,0.22);
+    border:2.5px solid #ef4444;
+    display:flex;align-items:center;justify-content:center;
+    font-size:18px;
+    box-shadow:0 0 18px rgba(239,68,68,0.7);
+  ">⚠️</div>`,
+});
+
+// ─── IncidentMapModal ─────────────────────────────────────────────────────────
+const IncidentMapModal = ({ incident, onClose }) => {
+  if (!incident) return null;
+  const lat = incident.lat ?? 25.5;
+  const lon = incident.lon ?? 92.5;
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 99990,
+        background: 'rgba(2,6,23,0.78)', backdropFilter: 'blur(5px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--white, #fff)', borderRadius: 16,
+          width: 600, maxWidth: '95vw', maxHeight: '90vh',
+          overflow: 'hidden', display: 'flex', flexDirection: 'column',
+          boxShadow: '0 24px 80px rgba(0,0,0,0.5)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{
+          background: 'linear-gradient(135deg,#dc2626,#b91c1c)',
+          padding: '16px 20px', color: '#fff',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 7 }}>
+              <MapPin size={16} /> {incident.location || 'Incident Location'}
+            </div>
+            <div style={{ fontSize: '0.75rem', opacity: 0.85, marginTop: 3 }}>
+              {incident.id} · {incident.type} · {incident.severity}
+            </div>
+          </div>
+          <button onClick={onClose}
+            style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <X size={15} />
+          </button>
+        </div>
+
+        {/* Map */}
+        <div style={{ height: 320, flex: 1 }}>
+          <MapContainer center={[lat, lon]} zoom={12} style={{ height: '100%', width: '100%' }} zoomControl={true}>
+            <TileLayer
+              url="https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png"
+              attribution="&copy; OpenStreetMap contributors"
+            />
+            <Marker position={[lat, lon]} icon={hazardIcon}>
+              <Popup>
+                <div style={{ padding: '4px 6px' }}>
+                  <div style={{ fontWeight: 800, color: '#dc2626', fontSize: '0.85rem' }}>⚠️ {incident.type}</div>
+                  <div style={{ fontSize: '0.8rem', color: '#0f172a', fontWeight: 600, marginTop: 2 }}>{incident.location}</div>
+                  {incident.roadBlock && incident.roadBlock !== 'none' && (
+                    <div style={{ fontSize: '0.72rem', color: '#ef4444', fontWeight: 600, marginTop: 2 }}>Blockage: {incident.roadBlock.toUpperCase()}</div>
+                  )}
+                </div>
+              </Popup>
+            </Marker>
+          </MapContainer>
+        </div>
+
+        {/* Info Footer */}
+        <div style={{ padding: '12px 20px', display: 'flex', gap: 16, flexWrap: 'wrap', borderTop: '1px solid var(--line, #e2e8f0)', background: 'var(--surface, #f8fafc)' }}>
+          {incident.roadBlock && incident.roadBlock !== 'none' && (
+            <div style={{ fontSize: '0.8rem' }}>
+              <span style={{ color: 'var(--slate)', marginRight: 4 }}>Blockage:</span>
+              <span style={{ fontWeight: 700, color: '#ef4444' }}>{incident.roadBlock.toUpperCase()}</span>
+            </div>
+          )}
+          {incident.slope != null && (
+            <div style={{ fontSize: '0.8rem' }}>
+              <span style={{ color: 'var(--slate)', marginRight: 4 }}>Slope:</span>
+              <span style={{ fontWeight: 700 }}>{incident.slope}°</span>
+            </div>
+          )}
+          {incident.rainfall != null && (
+            <div style={{ fontSize: '0.8rem' }}>
+              <span style={{ color: 'var(--slate)', marginRight: 4 }}>Rainfall:</span>
+              <span style={{ fontWeight: 700 }}>{incident.rainfall} mm</span>
+            </div>
+          )}
+          <div style={{ fontSize: '0.8rem' }}>
+            <span style={{ color: 'var(--slate)', marginRight: 4 }}>Officer:</span>
+            <span style={{ fontWeight: 700 }}>{incident.officerName}</span>
+          </div>
+          <div style={{ fontSize: '0.78rem', color: 'var(--slate)', fontFamily: 'monospace' }}>
+            {lat.toFixed(5)}, {lon.toFixed(5)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const Incidents = () => {
   const navigate = useNavigate();
   const { t } = useLang();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [mapTarget, setMapTarget] = useState(null); // incident to view on map
   const [photoPreview, setPhotoPreview] = useState(null);
   const [photoBase64,  setPhotoBase64]  = useState(null);
   const [deaths,       setDeaths]       = useState('');
@@ -400,23 +522,25 @@ export const Incidents = () => {
           <table>
             <thead>
               <tr>
-                <th>ID</th>
+                <th>Field Officer</th>
                 <th>Type</th>
                 <th>Root Cause</th>
                 <th>Location</th>
                 <th>Severity</th>
                 <th>Time Reported</th>
                 <th>Status</th>
+                <th>Map</th>
               </tr>
             </thead>
             <tbody>
               {sortedIncidents.map(inc => (
                 <tr key={inc.rawId || inc.id} style={inc.isNew ? { background: 'rgba(239, 68, 68, 0.05)' } : undefined}>
-                  <td style={{ fontWeight: 600 }}>
-                    {inc.id}
+                  <td style={{ padding: '10px 16px', fontSize: '0.82rem' }}>
+                    <div style={{ fontWeight: 600, color: 'var(--ink)' }}>{inc.officerName}</div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--slate)', marginTop: 2 }}>{inc.id}</div>
                     {inc.isNew && (
                       <span style={{
-                        marginLeft: 6,
+                        display: 'inline-block', marginTop: 4,
                         fontSize: '0.62rem',
                         fontWeight: 800,
                         color: '#ef4444',
@@ -456,16 +580,43 @@ export const Incidents = () => {
                         Blockage: {inc.roadBlock.toUpperCase()}
                       </div>
                     )}
+                    {(inc.slope != null || inc.rainfall != null) && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--slate)', marginTop: 2 }}>
+                        {inc.slope != null ? `Slope: ${inc.slope}°` : ''}
+                        {inc.slope != null && inc.rainfall != null ? ' · ' : ''}
+                        {inc.rainfall != null ? `Rain: ${inc.rainfall}mm` : ''}
+                      </div>
+                    )}
                   </td>
                   <td><Badge type={inc.severity === 'CRITICAL' ? 'danger' : inc.severity === 'WARNING' ? 'warning' : 'default'}>{inc.severity}</Badge></td>
                   <td>{inc.time}</td>
                   <td><Badge type={inc.status === 'ACTIVE' ? 'danger' : 'default'}>{t(inc.status) || inc.status}</Badge></td>
+                  <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                    {(inc.lat != null || inc.isLive) && (
+                      <button
+                        onClick={() => setMapTarget(inc)}
+                        style={{
+                          padding: '4px 10px', borderRadius: 6,
+                          background: 'linear-gradient(135deg,#0284c7,#0ea5e9)',
+                          color: '#fff', border: 'none',
+                          fontSize: '0.72rem', fontWeight: 700,
+                          cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                          boxShadow: '0 1px 6px rgba(14,165,233,0.3)',
+                        }}
+                      >
+                        <Eye size={11} /> View
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Incident Map Modal */}
+      {mapTarget && <IncidentMapModal incident={mapTarget} onClose={() => setMapTarget(null)} />}
 
       {/* Report Modal */}
       <Modal isOpen={isModalOpen} onClose={_resetForm} title="Report New Incident" footer={modalFooter}>

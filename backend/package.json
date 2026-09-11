@@ -6,7 +6,8 @@
     "type": "commonjs",
     "scripts": {
         "start": "node server.js",
-        "dev": "nodemon server.js"
+        "dev": "nodemon server.js",
+        "seed:demo-vehicles": "node scripts/seedDemoVehicles.js"
     },
     "dependencies": {
         "@google/generative-ai": "^0.24.1",

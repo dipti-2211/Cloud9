@@ -37,6 +37,13 @@ const AdminRoute = ({ children }) => {
   return user?.role === 'ADMIN' ? children : <Navigate to="/dashboard" replace />;
 };
 
+// Role-based route — redirects to /dashboard if user's role not in allowedRoles
+const RoleRoute = ({ children, allowedRoles }) => {
+  if (!auth.isLoggedIn()) return <Navigate to="/login" replace />;
+  const user = auth.getUser();
+  return allowedRoles.includes(user?.role) ? children : <Navigate to="/dashboard" replace />;
+};
+
 function App() {
   return (
     <LanguageProvider>
@@ -58,7 +65,7 @@ function App() {
           <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard"          element={<Dashboard />} />
-            <Route path="vehicles"           element={<Vehicles />} />
+            <Route path="vehicles"           element={<AdminRoute><Vehicles /></AdminRoute>} />
             <Route path="roads"              element={<Roads />} />
             <Route path="incidents"          element={<Incidents />} />
             <Route path="deliveries"         element={<Deliveries />} />
@@ -74,8 +81,8 @@ function App() {
             <Route path="critical-roads"     element={<CriticalRoads />} />
             {/* Phase 6: Personnel management (admin only) */}
             <Route path="personnel"           element={<AdminRoute><Personnel /></AdminRoute>} />
-            {/* Field officer incident reporting */}
-            <Route path="incident-report"     element={<IncidentReport />} />
+            {/* Field officer incident reporting — admin + field officer only */}
+            <Route path="incident-report"     element={<RoleRoute allowedRoles={['ADMIN','FIELD_OFFICER']}><IncidentReport /></RoleRoute>} />
           </Route>
 
           {/* Catch-all */}

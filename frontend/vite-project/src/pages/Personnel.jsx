@@ -7,9 +7,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import {
-  Users, UserCheck, UserX, Edit2, RefreshCw, Search, ChevronDown, X, Save,
+  Users, UserCheck, UserX, Edit2, RefreshCw, Search, ChevronDown, X, Save, UserCircle,
 } from 'lucide-react';
-import { authAPI } from '../services/api';
+import { authAPI, auth } from '../services/api';
 import { PageHeader } from '../components/common/PageHeader';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -42,98 +42,304 @@ const fmtDate = (ts) => {
   return isNaN(d) ? '—' : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
-// ─── Edit modal ─────────────────────────────────────────────────────────────
+// ─── Edit modal field config ─────────────────────────────────────────────────
 
-const OFFICER_FIELDS = [
-  { key: 'firstName',      label: 'First Name'      },
-  { key: 'lastName',       label: 'Last Name'        },
-  { key: 'email',          label: 'Email'            },
-  { key: 'mobileNumber',   label: 'Mobile'           },
-  { key: 'district',       label: 'District'         },
-  { key: 'state',          label: 'State'            },
-  { key: 'postingLocation',label: 'Posting Location' },
-  { key: 'department',     label: 'Department'       },
-  { key: 'designation',    label: 'Designation'      },
+const OFFICER_SECTIONS = [
+  {
+    title: 'Personal',
+    fields: [
+      { key: 'firstName',       label: 'First Name' },
+      { key: 'lastName',        label: 'Last Name' },
+      { key: 'dateOfBirth',     label: 'Date of Birth', type: 'date' },
+      { key: 'gender',          label: 'Gender', type: 'select', options: ['Male', 'Female', 'Other', 'Prefer not to say'] },
+    ],
+  },
+  {
+    title: 'Contact',
+    fields: [
+      { key: 'email',           label: 'Email' },
+      { key: 'mobileNumber',    label: 'Mobile' },
+    ],
+  },
+  {
+    title: 'Role & Deployment',
+    fields: [
+      { key: 'employeeId',      label: 'Employee ID' },
+      { key: 'department',      label: 'Department' },
+      { key: 'designation',     label: 'Designation' },
+      { key: 'office',          label: 'Office' },
+      { key: 'district',        label: 'District' },
+      { key: 'state',           label: 'State' },
+      { key: 'postingLocation', label: 'Posting Location' },
+    ],
+  },
+  {
+    title: 'Account',
+    fields: [
+      { key: 'accountStatus', label: 'Status', type: 'select', options: ['APPROVED', 'DISABLED', 'INACTIVE'] },
+    ],
+  },
 ];
 
-const OPERATOR_FIELDS = [
-  { key: 'firstName',      label: 'First Name'        },
-  { key: 'lastName',       label: 'Last Name'          },
-  { key: 'email',          label: 'Email'              },
-  { key: 'mobileNumber',   label: 'Mobile'             },
-  { key: 'district',       label: 'District'           },
-  { key: 'state',          label: 'State'              },
-  { key: 'postingLocation',label: 'Posting Location'   },
-  { key: 'licenseNumber',  label: 'License Number'     },
-  { key: 'vehicleRegNumber',label: 'Vehicle Reg.'      },
-  { key: 'assignedRoute',  label: 'Assigned Route'     },
+const OPERATOR_SECTIONS = [
+  {
+    title: 'Personal',
+    fields: [
+      { key: 'firstName',       label: 'First Name' },
+      { key: 'lastName',        label: 'Last Name' },
+      { key: 'dateOfBirth',     label: 'Date of Birth', type: 'date' },
+      { key: 'gender',          label: 'Gender', type: 'select', options: ['Male', 'Female', 'Other', 'Prefer not to say'] },
+    ],
+  },
+  {
+    title: 'Contact',
+    fields: [
+      { key: 'email',           label: 'Email' },
+      { key: 'mobileNumber',    label: 'Mobile' },
+    ],
+  },
+  {
+    title: 'Role & Deployment',
+    fields: [
+      { key: 'licenseNumber',   label: 'License Number' },
+      { key: 'vehicleRegNumber',label: 'Vehicle Reg.' },
+      { key: 'vehicleType',     label: 'Vehicle Type' },
+      { key: 'assignedRoute',   label: 'Assigned Route' },
+      { key: 'district',        label: 'District' },
+      { key: 'state',           label: 'State' },
+      { key: 'postingLocation', label: 'Posting Location' },
+    ],
+  },
+  {
+    title: 'Account',
+    fields: [
+      { key: 'accountStatus', label: 'Status', type: 'select', options: ['APPROVED', 'DISABLED', 'INACTIVE'] },
+    ],
+  },
 ];
 
+// ─── ProfileViewModal — read-only full profile ─────────────────────────────────────────
+const ProfileViewModal = ({ user, onClose }) => {
+  if (!user) return null;
+  const isOfficer = user.role === 'FIELD_OFFICER';
+  const initials = `${(user.firstName||'?')[0]}${(user.lastName||'?')[0]}`.toUpperCase();
+
+  const Section = ({ title, children }) => (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--slate)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>{title}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 12px' }}>{children}</div>
+    </div>
+  );
+  const Field = ({ label, value }) => (
+    <div>
+      <div style={{ fontSize: '0.7rem', color: 'var(--slate)', marginBottom: 1 }}>{label}</div>
+      <div style={{ fontSize: '0.85rem', fontWeight: 600, color: value ? 'var(--ink)' : 'var(--slate-soft)' }}>{value || '—'}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1002, background: 'rgba(15,23,42,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
+      <div style={{ background: 'var(--white)', borderRadius: 16, width: 520, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 60px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div style={{ background: 'linear-gradient(135deg, var(--sky-dark), var(--sky))', padding: '20px 24px', color: '#fff', borderRadius: '16px 16px 0 0' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              {user.profilePhotoUrl ? (
+                <img src={user.profilePhotoUrl} alt="profile"
+                  style={{ width: 52, height: 52, borderRadius: '50%', objectFit: 'cover', border: '2px solid rgba(255,255,255,0.4)' }} />
+              ) : (
+                <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: '1.2rem', border: '2px solid rgba(255,255,255,0.35)' }}>{initials}</div>
+              )}
+              <div>
+                <div style={{ fontWeight: 800, fontSize: '1.05rem' }}>{user.firstName} {user.lastName}</div>
+                <div style={{ fontSize: '0.75rem', opacity: 0.85, marginTop: 2 }}>{user.userId} · {user.role.replace('_',' ')}</div>
+              </div>
+            </div>
+            <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%', width: 28, height: 28, cursor: 'pointer', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={14} /></button>
+          </div>
+        </div>
+        <div style={{ padding: '20px 24px' }}>
+          <Section title="Personal">
+            <Field label="Date of Birth" value={user.dateOfBirth ? new Date(user.dateOfBirth).toLocaleDateString('en-IN') : null} />
+            <Field label="Gender" value={user.gender} />
+          </Section>
+          <Section title="Contact">
+            <Field label="Email" value={user.email} />
+            <Field label="Mobile" value={user.mobileNumber} />
+          </Section>
+          {isOfficer ? (
+            <Section title="Officer Details">
+              <Field label="Employee ID" value={user.employeeId} />
+              <Field label="Department" value={user.department} />
+              <Field label="Designation" value={user.designation} />
+              <Field label="Office" value={user.office} />
+              <Field label="District" value={user.district} />
+              <Field label="State" value={user.state} />
+              <Field label="Posting Location" value={user.postingLocation} />
+            </Section>
+          ) : (
+            <Section title="Operator Details">
+              <Field label="License No." value={user.licenseNumber} />
+              <Field label="Vehicle Reg." value={user.vehicleRegNumber} />
+              <Field label="Vehicle Type" value={user.vehicleType} />
+              <Field label="Assigned Route" value={user.assignedRoute} />
+              <Field label="District" value={user.district} />
+              <Field label="State" value={user.state} />
+            </Section>
+          )}
+          <Section title="Account">
+            <Field label="Status" value={user.accountStatus} />
+            <Field label="Registered" value={user.createdAt ? new Date(user.createdAt).toLocaleDateString('en-IN') : null} />
+          </Section>
+        </div>
+      </div>
+    </div>
+  );
+};
+// ─── EditModal ───────────────────────────────────────────────────────────────────────────
 const EditModal = ({ user, onSave, onClose, saving }) => {
-  const fields = user.role === 'FIELD_OFFICER' ? OFFICER_FIELDS : OPERATOR_FIELDS;
+  const sections = user.role === 'FIELD_OFFICER' ? OFFICER_SECTIONS : OPERATOR_SECTIONS;
+  // Flatten all field keys for initializing form state
+  const allFields = sections.flatMap(s => s.fields);
+
   const [form, setForm] = useState(() => {
     const init = {};
-    fields.forEach(f => { init[f.key] = user[f.key] ?? ''; });
+    allFields.forEach(f => {
+      let val = user[f.key] ?? '';
+      if (f.type === 'date' && val) {
+        try { val = new Date(val).toISOString().slice(0, 10); } catch { val = ''; }
+      }
+      init[f.key] = val;
+    });
     return init;
   });
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState(user.profilePhotoUrl || '');
+
+  const handlePhotoChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setPhotoFile(file);
+      setPhotoPreview(URL.createObjectURL(file));
+    }
+  };
+
+  const inputStyle = {
+    padding: '8px 10px', borderRadius: 8, fontSize: '0.85rem',
+    border: '1px solid var(--line, #e2e8f0)', outline: 'none',
+    color: 'var(--ink)', background: 'var(--white)', width: '100%', boxSizing: 'border-box',
+  };
+
+  const renderField = (f) => {
+    if (f.type === 'select') {
+      return (
+        <select value={form[f.key]} onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))} style={inputStyle}>
+          <option value="">Select {f.label}</option>
+          {f.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+        </select>
+      );
+    }
+    return (
+      <input
+        type={f.type || 'text'}
+        value={form[f.key]}
+        onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))}
+        style={inputStyle}
+      />
+    );
+  };
 
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 1000,
-      background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'rgba(15,23,42,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
     }} onClick={onClose}>
       <div style={{
-        background: 'var(--white, #fff)', borderRadius: 14, padding: '28px 28px 24px',
-        width: 480, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto',
-        boxShadow: '0 20px 60px rgba(0,0,0,0.22)',
+        background: 'var(--white, #fff)', borderRadius: 16,
+        width: 600, maxWidth: '96vw', maxHeight: '92vh', overflowY: 'auto',
+        boxShadow: '0 24px 70px rgba(0,0,0,0.28)',
       }} onClick={e => e.stopPropagation()}>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: '1.05rem', color: 'var(--ink, #0f172a)' }}>
-              Edit {user.role === 'FIELD_OFFICER' ? 'Field Officer' : 'Vehicle Operator'}
-            </div>
-            <div style={{ fontSize: '0.8rem', color: 'var(--slate, #64748b)', marginTop: 2 }}>
-              {user.userId} — password unchanged
+        {/* Modal header */}
+        <div style={{
+          background: 'linear-gradient(135deg, var(--sky-dark, #0284c7), var(--sky, #0ea5e9))',
+          padding: '18px 24px', color: '#fff', borderRadius: '16px 16px 0 0',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {photoPreview ? (
+              <img src={photoPreview} alt="" style={{ width: 44, height: 44, borderRadius: '50%', objectFit: 'cover', border: '2px solid rgba(255,255,255,0.4)' }} />
+            ) : (
+              <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: '1.1rem' }}>
+                {(user.firstName || '?')[0]}
+              </div>
+            )}
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '1rem' }}>Edit {user.role === 'FIELD_OFFICER' ? 'Field Officer' : 'Vehicle Operator'}</div>
+              <div style={{ fontSize: '0.75rem', opacity: 0.85, marginTop: 2 }}>{user.userId} — password unchanged</div>
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--slate)' }}>
-            <X size={20} />
+          <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%', width: 30, height: 30, cursor: 'pointer', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <X size={15} />
           </button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' }}>
-          {fields.map(f => (
-            <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--slate)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                {f.label}
-              </span>
-              <input
-                value={form[f.key]}
-                onChange={e => setForm(prev => ({ ...prev, [f.key]: e.target.value }))}
-                style={{
-                  padding: '8px 10px', borderRadius: 8, fontSize: '0.88rem',
-                  border: '1px solid var(--line, #e2e8f0)', outline: 'none',
-                  color: 'var(--ink)', background: 'var(--white)',
-                }}
-              />
-            </label>
+        <div style={{ padding: '20px 24px' }}>
+          {/* Profile photo change */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, padding: '10px 14px', background: 'var(--sky-tint, #f0f9ff)', borderRadius: 10, border: '1px solid var(--line)' }}>
+            {photoPreview ? (
+              <img src={photoPreview} alt="" style={{ width: 44, height: 44, borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--sky)' }} />
+            ) : (
+              <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'var(--sky)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>
+                {(user.firstName || '?')[0]}
+              </div>
+            )}
+            <div>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--ink)', marginBottom: 3 }}>Profile Photo</div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--sky-dark)', cursor: 'pointer', fontWeight: 600, textDecoration: 'underline' }}>
+                Change Photo
+                <input type="file" accept="image/*" onChange={handlePhotoChange} style={{ display: 'none' }} />
+              </label>
+            </div>
+          </div>
+
+          {/* Sections */}
+          {sections.map(section => (
+            <div key={section.title} style={{ marginBottom: 20 }}>
+              <div style={{
+                fontSize: '0.65rem', fontWeight: 800, color: 'var(--sky-dark)',
+                textTransform: 'uppercase', letterSpacing: '0.08em',
+                marginBottom: 10, paddingBottom: 6,
+                borderBottom: '2px solid var(--sky-tint, #e0f2fe)',
+              }}>
+                {section.title}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 16px' }}>
+                {section.fields.map(f => (
+                  <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--slate)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      {f.label}
+                    </span>
+                    {renderField(f)}
+                  </label>
+                ))}
+              </div>
+            </div>
           ))}
-        </div>
 
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 20 }}>
-          <button onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 18px' }}>
-            Cancel
-          </button>
-          <button
-            onClick={() => onSave(user.userId, form)}
-            disabled={saving}
-            className="btn btn-primary"
-            style={{ padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 6 }}
-          >
-            <Save size={14} />
-            {saving ? 'Saving…' : 'Save Changes'}
-          </button>
+          {/* Action buttons */}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
+            <button onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 18px' }}>Cancel</button>
+            <button
+              onClick={() => onSave(user.userId, form, photoFile)}
+              disabled={saving}
+              className="btn btn-primary"
+              style={{ padding: '8px 20px', display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              <Save size={14} />
+              {saving ? 'Saving…' : 'Save Changes'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -163,29 +369,50 @@ const ConfirmDialog = ({ message, onConfirm, onCancel, confirmLabel = 'Confirm',
 
 // ─── Personnel row ───────────────────────────────────────────────────────────
 
-const PersonnelRow = ({ user, onEdit, onToggleStatus, acting }) => {
+const PersonnelRow = ({ user, onEdit, onView, onToggleStatus, acting }) => {
   const isDisabled = user.accountStatus === 'DISABLED';
+  const initials = `${(user.firstName||'?')[0]}${(user.lastName||'?')[0]}`.toUpperCase();
   return (
     <tr style={{ borderBottom: '1px solid var(--line, #e2e8f0)', opacity: isDisabled ? 0.65 : 1 }}>
-      <td style={{ padding: '12px 16px' }}>
-        <div style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--ink)' }}>
-          {user.firstName} {user.lastName}
-        </div>
+      {/* Photo */}
+      <td style={{ padding: '10px 12px', width: 48 }}>
+        {user.profilePhotoUrl ? (
+          <img src={user.profilePhotoUrl} alt=""
+            style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--line)' }} />
+        ) : (
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%',
+            background: 'linear-gradient(135deg, var(--sky-dark), var(--sky))',
+            color: '#fff', fontWeight: 800, fontSize: '0.78rem',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>{initials}</div>
+        )}
+      </td>
+      {/* Name */}
+      <td style={{ padding: '10px 12px' }}>
+        <button onClick={() => onView(user)} style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--sky-dark)', textDecoration: 'underline dotted' }}>
+            {user.firstName} {user.lastName}
+          </div>
+        </button>
         <div style={{ fontSize: '0.75rem', color: 'var(--slate)' }}>{user.userId}</div>
       </td>
-      <td style={{ padding: '12px 16px', fontSize: '0.82rem', color: 'var(--slate)' }}>
-        {user.email || '—'}
+      {/* Phone */}
+      <td style={{ padding: '10px 12px', fontSize: '0.82rem', color: 'var(--slate)' }}>
+        {user.mobileNumber || '—'}
       </td>
-      <td style={{ padding: '12px 16px', fontSize: '0.82rem', color: 'var(--slate)' }}>
-        {user.district || user.postingLocation || '—'}
+      {/* Email */}
+      <td style={{ padding: '10px 12px', fontSize: '0.82rem', color: 'var(--slate)' }}>
+        <button onClick={() => onView(user)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--sky-dark)', textDecoration: 'underline dotted', fontSize: '0.82rem' }}>
+          {user.email || '—'}
+        </button>
       </td>
-      <td style={{ padding: '12px 16px' }}>
+      {/* Status */}
+      <td style={{ padding: '10px 12px' }}>
         {statusBadge(user.accountStatus)}
       </td>
-      <td style={{ padding: '12px 16px', fontSize: '0.78rem', color: 'var(--slate)' }}>
-        {fmtDate(user.createdAt)}
-      </td>
-      <td style={{ padding: '12px 16px' }}>
+      {/* Actions */}
+      <td style={{ padding: '10px 12px' }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <button
             onClick={() => onEdit(user)}
@@ -222,6 +449,7 @@ export const Personnel = () => {
   const [error, setError]               = useState(null);
   const [search, setSearch]             = useState('');
   const [editTarget, setEditTarget]     = useState(null);   // user being edited
+  const [viewTarget, setViewTarget]     = useState(null);   // user being viewed (read-only)
   const [confirmTarget, setConfirmTarget] = useState(null); // { user, action }
   const [saving, setSaving]             = useState(false);
   const [acting, setActing]             = useState(null);   // userId being toggled
@@ -256,13 +484,17 @@ export const Personnel = () => {
     });
 
   // Edit save
-  const handleSave = async (userId, payload) => {
+  const handleSave = async (userId, payload, photoFile) => {
     setSaving(true);
     try {
+      if (photoFile) {
+        await authAPI.uploadPhoto(userId, photoFile);
+      }
       const res = await authAPI.updateUser(userId, payload);
       setUsers(prev => prev.map(u => u.userId === userId ? { ...u, ...res.user } : u));
       setEditTarget(null);
       toast.success('Changes saved.');
+      load();
     } catch (e) {
       toast.error(e.message || 'Save failed.');
     } finally {
@@ -380,9 +612,9 @@ export const Personnel = () => {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: 'var(--surface, #f8fafc)', borderBottom: '1px solid var(--line)' }}>
-                  {['Name / ID', 'Email', 'Location', 'Status', 'Registered', 'Actions'].map(h => (
+                  {['Photo', 'Name / ID', 'Phone', 'Email', 'Status', 'Actions'].map(h => (
                     <th key={h} style={{
-                      padding: '10px 16px', textAlign: 'left',
+                      padding: '10px 12px', textAlign: 'left',
                       fontSize: '0.72rem', fontWeight: 800, color: 'var(--slate)',
                       textTransform: 'uppercase', letterSpacing: '0.06em', whiteSpace: 'nowrap',
                     }}>{h}</th>
@@ -396,6 +628,7 @@ export const Personnel = () => {
                     user={u}
                     acting={acting}
                     onEdit={setEditTarget}
+                    onView={setViewTarget}
                     onToggleStatus={handleToggleStatus}
                   />
                 ))}
@@ -415,6 +648,9 @@ export const Personnel = () => {
       )}
 
       {/* Modals */}
+      {viewTarget && (
+        <ProfileViewModal user={viewTarget} onClose={() => setViewTarget(null)} />
+      )}
       {editTarget && (
         <EditModal user={editTarget} onSave={handleSave} onClose={() => setEditTarget(null)} saving={saving} />
       )}

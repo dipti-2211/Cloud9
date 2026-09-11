@@ -338,7 +338,8 @@ app.patch("/api/auth/users/:userId", async (req, res) => {
 
     const EDITABLE = ["firstName", "lastName", "email", "mobileNumber", "district", "state",
         "postingLocation", "department", "designation", "office",
-        "assignedRoute", "vehicleRegNumber", "vehicleType", "licenseNumber"];
+        "assignedRoute", "vehicleRegNumber", "vehicleType", "licenseNumber",
+        "profilePhotoUrl", "dateOfBirth", "gender", "employeeId", "accountStatus"];
 
     const update = {};
     EDITABLE.forEach(f => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
@@ -352,6 +353,25 @@ app.patch("/api/auth/users/:userId", async (req, res) => {
 
         if (!user) return res.status(404).json({ success: false, message: "User not found" });
         return res.json({ success: true, user });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// POST /api/auth/users/:userId/photo  — upload profile photo (admin only)
+app.post("/api/auth/users/:userId/photo", upload.single("photo"), async (req, res) => {
+    const decoded = verifyToken(req);
+    if (!decoded || decoded.role !== "ADMIN") return res.status(403).json({ success: false, message: "Admin only" });
+    if (!req.file) return res.status(400).json({ success: false, message: "No photo uploaded" });
+    try {
+        const photoUrl = `/uploads/${req.file.filename}`;
+        const user = await User.findOneAndUpdate(
+            { userId: req.params.userId },
+            { $set: { profilePhotoUrl: photoUrl } },
+            { new: true }
+        ).select("-passwordHash");
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        return res.json({ success: true, profilePhotoUrl: photoUrl, user });
     } catch (err) {
         return res.status(500).json({ success: false, message: err.message });
     }
@@ -457,7 +477,17 @@ app.post("/api/alerts", async (req, res) => {
         return res.status(403).json({ success: false, message: "Admin or Field Officer only" });
     }
     try {
-        const alert = await Alert.create({ ...req.body, createdBy: decoded.userId });
+        // Allow extra fields: severity, district, regionalMessage, regionalLang
+        const { message, severity, district, regionalMessage, regionalLang, latitude, longitude, riskCategory, riskPercentage, source } = req.body;
+        const alert = await Alert.create({
+            message, severity, district, regionalMessage, regionalLang,
+            latitude: parseFloat(latitude) || 0,
+            longitude: parseFloat(longitude) || 0,
+            riskCategory: riskCategory || 'High',
+            riskPercentage: parseFloat(riskPercentage) || 80,
+            source: source || 'admin-created',
+            createdBy: decoded.userId,
+        });
         const io_ = req.app.get("io");
         if (io_) io_.to("dashboard").emit("alert_created", alert);
         return res.status(201).json({ success: true, alert });
@@ -858,6 +888,28 @@ app.post("/api/road-incidents", upload.single("photo"), async (req, res) => {
             last_incident_at: new Date(),
         };
 
+        // 7b. Create an Alert record for this incident so it triggers alerts across the system
+        let createdAlert = null;
+        try {
+            const incTypeStr = (incident.incident_type || "Road Incident").replace(/_/g, " ").toUpperCase();
+            const alertMsg = `🚨 ${incTypeStr}: Reported on ${segment.road_name || 'Corridor Road'} (${segment.district || 'NER'}). Blockage: ${(incident.road_block || 'none').toUpperCase()}. ${incident.description || ''}`.trim();
+            const alertSeverity = incident.road_block === "full" ? "CRITICAL" : (incident.road_block === "partial" ? "HIGH" : "MODERATE");
+            createdAlert = await Alert.create({
+                type: "INCIDENT",
+                severity: alertSeverity,
+                message: alertMsg,
+                district: segment.district,
+                latitude: incident.location?.coordinates?.[1] || segment.start_coords?.coordinates?.[1] || 0,
+                longitude: incident.location?.coordinates?.[0] || segment.start_coords?.coordinates?.[0] || 0,
+                riskCategory: assignedRisk === "high" ? "High" : (assignedRisk === "medium" ? "Medium" : "Low"),
+                riskPercentage: assignedScore || 85,
+                source: "officer",
+                createdBy: decoded ? decoded.userId : "Field Officer",
+            });
+        } catch (alertErr) {
+            console.warn("Could not create Alert record for incident:", alertErr.message);
+        }
+
         // 8. Broadcast via WebSocket (both global and dashboard room)
         const io_ = req.app.get("io");
         if (io_) {
@@ -879,6 +931,11 @@ app.post("/api/road-incidents", upload.single("photo"), async (req, res) => {
             io_.emit("incident_created", incidentBroadcast);
             io_.to("dashboard").emit("road_segment_updated", segBroadcast);
             io_.to("dashboard").emit("incident_created", incidentBroadcast);
+
+            if (createdAlert) {
+                io_.emit("alert_created", createdAlert);
+                io_.to("dashboard").emit("alert_created", createdAlert);
+            }
 
             // 9. Reroute check if segment is now high-risk
             if (assignedRisk === "high") {

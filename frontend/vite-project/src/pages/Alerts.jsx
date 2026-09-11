@@ -3,16 +3,52 @@
  * Sky-blue / white theme. Risk colour used ONLY for accent badge + % text.
  * 4 distinct card layouts alternating across the grid.
  */
-import React, { useState, useEffect, useRef } from 'react';
-import { api } from '../services/api';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { api, auth, alertsAPI, ensureToken } from '../services/api';
 import { PageHeader } from '../components/common/PageHeader';
 import { useUserLocation } from '../hooks/useUserLocation';
+import { useSocket } from '../hooks/useSocket';
 import {
   AlertTriangle, BellRing, MapPin, Loader, X,
   Route, History, FileText, Activity, TrendingUp,
-  ArrowRight, Clock, Wifi,
+  ArrowRight, Clock, Wifi, PlusCircle, Send,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+// ─────────────────────────────────────────────
+// Regional language alert message templates
+// Keyed by severity. Shown alongside English.
+// ─────────────────────────────────────────────
+const REGIONAL = {
+  as: {  // Assamese
+    CRITICAL: `🚨 জৰুৰী সতৰ্কবাৰ্তা: উচ্চ বিপদৰ পৰিস্থিতি। অনুগ্ৰহ কৰি সতৰ্ক হওক।`,
+    HIGH:     `⚠️ উচ্চ বিপদ সতৰ্কতা: পথ বিপজ্জনক হ'ব পাৰে। সাৱধান হওক।`,
+    MODERATE: `ℹ️ মধ্যম বিপদ: যানবাহন চালকসকলে সতৰ্কতা অৱলম্বন কৰক।`,
+    LOW:      `✅ কম বিপদ: পৰিস্থিতি নিৰাপদ, সজাগ থাকক।`,
+  },
+  bn: {  // Bengali (Barak Valley)
+    CRITICAL: `🚨 জরুরি সতর্কবার্তা: উচ্চ ঝুঁকিপূর্ণ পরিস্থিতি। অনুগ্রহ করে সতর্ক থাকুন।`,
+    HIGH:     `⚠️ উচ্চ ঝুঁকি সতর্কতা: রাস্তা বিপজ্জনক হতে পারে। সাবধান থাকুন।`,
+    MODERATE: `ℹ️ মাঝারি ঝুঁকি: যানবাহন চালকরা সতর্কতার সাথে চলুন।`,
+    LOW:      `✅ কম ঝুঁকি: পরিস্থিতি নিরাপদ, সচেতন থাকুন।`,
+  },
+};
+
+// Short base64 WAV ping (440Hz, 0.15s) — zero asset dependency
+const PING_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAA' +
+  'EAAQAAwF0AAIA7AAACABAAZGFUYQAAAAAAAAAAAAAAAAAAAADgyMDY0KjQpKjQ' +
+  'oLigwKjYoMik2KTYoMCk2KDIpNig2KTYoMCk2KDIpNig2KDIp';
+
+const playPing = () => {
+  try { new Audio(PING_WAV).play(); } catch { /* autoplay blocked — silent */ }
+};
+
+const fireNotification = (title, body) => {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'granted') {
+    try { new Notification(title, { body, icon: '/favicon.ico', tag: 'sih-alert' }); } catch {}
+  }
+};
 
 // ─────────────────────────────────────────────
 // Helpers
@@ -109,9 +145,23 @@ const DetailModal = ({ alert, onClose }) => {
 
         {/* Body */}
         <div style={{ padding: '20px 24px' }}>
-          <p style={{ fontSize: '0.88rem', color: 'var(--ink)', lineHeight: 1.65, marginBottom: 18 }}>
+          <p style={{ fontSize: '0.88rem', color: 'var(--ink)', lineHeight: 1.65, marginBottom: 10 }}>
             {alert.message}
           </p>
+          {/* Regional language message — shown alongside English */}
+          {alert.regionalMessage && (
+            <div style={{
+              padding: '8px 12px', borderRadius: 8,
+              background: 'var(--sky-tint)', border: '1px solid var(--sky-tint-2)',
+              fontSize: '0.85rem', lineHeight: 1.6, color: 'var(--slate)',
+              marginBottom: 16,
+            }}>
+              <span style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--sky-dark)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 4 }}>
+                {alert.regionalLang === 'bn' ? 'বাংলা' : 'অসমীয়া'}
+              </span>
+              {alert.regionalMessage}
+            </div>
+          )}
 
           {/* Stats row */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 16 }}>
@@ -262,6 +312,16 @@ const CardB = ({ alert, coords, isExample, onView }) => {
       }}>
         {alert.message}
       </p>
+      {alert.regionalMessage && (
+        <p style={{
+          fontSize: '0.78rem', lineHeight: 1.5,
+          color: 'var(--slate)', fontStyle: 'italic',
+          margin: '-8px 0 14px',
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+        }}>
+          {alert.regionalMessage}
+        </p>
+      )}
 
       {/* Bottom */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto' }}>
@@ -334,6 +394,15 @@ const CardC = ({ alert, coords, isExample, onView, className = '' }) => {
             }}>
               {alert.message}
             </p>
+            {alert.regionalMessage && (
+              <p style={{
+                fontSize: '0.75rem', lineHeight: 1.5, color: 'var(--slate)', fontStyle: 'italic',
+                marginTop: 4, marginBottom: 0,
+                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+              }}>
+                {alert.regionalMessage}
+              </p>
+            )}
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
             <div style={{ fontSize: '0.63rem', color: 'var(--slate)', display: 'flex', alignItems: 'center', gap: 3 }}>
@@ -426,25 +495,59 @@ export const Alerts = () => {
   const [selected, setSelected] = useState(null);
   const seenIds = useRef(new Set());
   const { coords } = useUserLocation();
+  const { socket } = useSocket();
+  const role = auth.getUser()?.role;
+
+  // Admin create-alert form state
+  const [showCreate, setShowCreate] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    message: '', severity: 'HIGH', district: '', regionalLang: 'as',
+    latitude: '', longitude: '', riskCategory: 'High', riskPercentage: '80',
+  });
+  const [creating, setCreating] = useState(false);
+
+  // Request browser notification permission on mount
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Handle a newly arrived alert (socket or poll)
+  const handleNewAlert = useCallback((alert) => {
+    if (seenIds.current.has(alert._id)) return;
+    seenIds.current.add(alert._id);
+    setAlerts(prev => [alert, ...prev]);
+    playPing();
+    const near = coords && haversine(coords.lat, coords.lon, alert.latitude || 0, alert.longitude || 0) < 10;
+    if (near) {
+      toast.error(`⚠ Near You! ${alert.riskCategory} risk`, { duration: 6000,
+        style: { background: 'var(--danger-bg)', border: '2px solid var(--danger)', color: 'var(--ink)' } });
+    } else {
+      toast(`🔔 New Alert: ${alert.riskCategory} risk`, { icon: '⚠', duration: 4000 });
+    }
+    fireNotification(
+      `🚨 ${alert.riskCategory} Landslide Risk`,
+      alert.message?.slice(0, 100) || 'New risk alert received'
+    );
+  }, [coords]);
+
+  // Socket — primary path (<1s delivery)
+  useEffect(() => {
+    if (!socket) return;
+    socket.on('alert_created', handleNewAlert);
+    return () => socket.off('alert_created', handleNewAlert);
+  }, [socket, handleNewAlert]);
 
   const fetchAlerts = async (isInitial = false) => {
     try {
       const data = await api.getAlerts();
       if (!isInitial) {
-        data.filter(a => !seenIds.current.has(a._id)).forEach(a => {
-          const near = coords && haversine(coords.lat, coords.lon, a.latitude, a.longitude) < 10;
-          if (near) {
-            toast.error(`⚠ Near You! ${a.riskCategory} risk (${a.riskPercentage.toFixed(1)}%)`, {
-              duration: 6000,
-              style: { background: 'var(--danger-bg)', border: '2px solid var(--danger)', color: 'var(--ink)' },
-            });
-          } else {
-            toast(`🔔 ${a.riskCategory} landslide risk detected`, { icon: '⚠', duration: 4000 });
-          }
-        });
+        // Poll fallback: only process alerts not already seen via socket
+        data.filter(a => !seenIds.current.has(a._id)).forEach(handleNewAlert);
       }
       data.forEach(a => seenIds.current.add(a._id));
-      setAlerts(data); setError(null);
+      if (isInitial) { setAlerts(data); setError(null); }
     } catch {
       if (isInitial) setError('Could not load alerts — is the backend running?');
     } finally {
@@ -457,6 +560,38 @@ export const Alerts = () => {
     const id = setInterval(() => fetchAlerts(false), 30000);
     return () => clearInterval(id);
   }, [coords]);
+
+  // Admin: submit a new alert
+  const handleCreateAlert = async (e) => {
+    e.preventDefault();
+    if (!createForm.message.trim()) { toast.error('Message is required'); return; }
+    setCreating(true);
+    try {
+      const token = await ensureToken(true);
+      const regionalMsg = REGIONAL[createForm.regionalLang]?.[createForm.severity] || '';
+      const res = await fetch('/api/alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          ...createForm,
+          regionalMessage: regionalMsg,
+          latitude:  parseFloat(createForm.latitude)  || 25.1450,
+          longitude: parseFloat(createForm.longitude) || 93.0100,
+          riskPercentage: parseFloat(createForm.riskPercentage) || 80,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to create alert');
+      toast.success('Alert created and broadcast!', { icon: '🚨' });
+      setShowCreate(false);
+      setCreateForm({ message: '', severity: 'HIGH', district: '', regionalLang: 'as',
+        latitude: '', longitude: '', riskCategory: 'High', riskPercentage: '80' });
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   if (loading) return (
     <div>
@@ -546,6 +681,108 @@ export const Alerts = () => {
         {error && (
           <div style={{ padding: '12px 16px', marginBottom: 16, background: 'var(--danger-bg)', border: '1px solid var(--danger)', borderRadius: 8, color: 'var(--danger)', fontSize: '0.88rem' }}>
             {error}
+          </div>
+        )}
+
+        {/* Admin: Create Alert panel */}
+        {role === 'ADMIN' && (
+          <div style={{ marginBottom: 16 }}>
+            {!showCreate ? (
+              <button
+                onClick={() => setShowCreate(true)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '9px 18px', borderRadius: 8, border: '1.5px dashed var(--sky)',
+                  background: 'var(--sky-tint)', color: 'var(--sky-dark)',
+                  cursor: 'pointer', fontWeight: 700, fontSize: '0.84rem',
+                }}
+              >
+                <PlusCircle size={15} /> Create & Broadcast Alert
+              </button>
+            ) : (
+              <form onSubmit={handleCreateAlert} style={{
+                background: 'var(--white)', border: '1px solid var(--sky-tint-2)',
+                borderRadius: 12, padding: '18px 20px',
+                boxShadow: '0 4px 20px rgba(44,143,209,0.10)',
+              }}>
+                <div style={{ fontWeight: 800, fontSize: '0.9rem', marginBottom: 14, color: 'var(--sky-dark)' }}>
+                  🚨 Create & Broadcast Alert
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 14px', marginBottom: 12 }}>
+                  <label style={{ gridColumn: '1/-1', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--slate)', textTransform: 'uppercase' }}>Alert Message *</span>
+                    <textarea
+                      value={createForm.message}
+                      onChange={e => setCreateForm(p => ({ ...p, message: e.target.value }))}
+                      rows={3}
+                      required
+                      placeholder="Describe the hazard, location, and recommended action…"
+                      style={{ padding: '8px 10px', borderRadius: 7, border: '1px solid var(--line)', fontSize: '0.88rem', resize: 'vertical', fontFamily: 'inherit' }}
+                    />
+                  </label>
+                  {[['severity','Severity'],['district','District / Location']].map(([k,l]) => (
+                    k === 'severity' ? (
+                      <label key={k} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--slate)', textTransform: 'uppercase' }}>{l}</span>
+                        <select
+                          value={createForm.severity}
+                          onChange={e => setCreateForm(p => ({ ...p, severity: e.target.value }))}
+                          style={{ padding: '8px 10px', borderRadius: 7, border: '1px solid var(--line)', fontSize: '0.88rem' }}
+                        >
+                          {['LOW','MODERATE','HIGH','CRITICAL'].map(s => <option key={s}>{s}</option>)}
+                        </select>
+                      </label>
+                    ) : (
+                      <label key={k} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--slate)', textTransform: 'uppercase' }}>{l}</span>
+                        <input
+                          value={createForm[k]}
+                          onChange={e => setCreateForm(p => ({ ...p, [k]: e.target.value }))}
+                          placeholder="e.g. Dima Hasao"
+                          style={{ padding: '8px 10px', borderRadius: 7, border: '1px solid var(--line)', fontSize: '0.88rem' }}
+                        />
+                      </label>
+                    )
+                  ))}
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--slate)', textTransform: 'uppercase' }}>Regional Language</span>
+                    <select
+                      value={createForm.regionalLang}
+                      onChange={e => setCreateForm(p => ({ ...p, regionalLang: e.target.value }))}
+                      style={{ padding: '8px 10px', borderRadius: 7, border: '1px solid var(--line)', fontSize: '0.88rem' }}
+                    >
+                      <option value="as">Assamese (অসমীয়া)</option>
+                      <option value="bn">Bengali / বাংলা (Barak Valley)</option>
+                    </select>
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--slate)', textTransform: 'uppercase' }}>Risk %</span>
+                    <input
+                      type="number" min="0" max="100"
+                      value={createForm.riskPercentage}
+                      onChange={e => setCreateForm(p => ({ ...p, riskPercentage: e.target.value }))}
+                      style={{ padding: '8px 10px', borderRadius: 7, border: '1px solid var(--line)', fontSize: '0.88rem' }}
+                    />
+                  </label>
+                </div>
+                {/* Preview regional message */}
+                {REGIONAL[createForm.regionalLang]?.[createForm.severity] && (
+                  <div style={{ padding: '8px 12px', background: 'var(--sky-tint)', borderRadius: 7, fontSize: '0.82rem', marginBottom: 12, color: 'var(--slate)', fontStyle: 'italic' }}>
+                    Preview: {REGIONAL[createForm.regionalLang][createForm.severity]}
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <button type="button" onClick={() => setShowCreate(false)}
+                    style={{ padding: '8px 16px', borderRadius: 7, border: '1px solid var(--line)', background: 'transparent', cursor: 'pointer', fontSize: '0.84rem' }}>
+                    Cancel
+                  </button>
+                  <button type="submit" disabled={creating}
+                    style={{ padding: '8px 18px', borderRadius: 7, border: 'none', background: 'var(--sky-dark)', color: '#fff', cursor: 'pointer', fontWeight: 700, fontSize: '0.84rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Send size={13} />{creating ? 'Broadcasting…' : 'Broadcast Alert'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         )}
 

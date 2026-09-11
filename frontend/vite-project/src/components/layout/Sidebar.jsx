@@ -31,13 +31,13 @@ export const Sidebar = () => {
   const mainItems = [
     { path:'/dashboard',      label:'Dashboard',       icon:LayoutDashboard },
     { path:'/districts',      label:'Districts',       icon:MapPin },
-    { path:'/vehicles',       label:'Vehicles',        icon:Truck },
+    ...(isAdmin ? [{ path:'/vehicles', label:'Vehicles', icon:Truck }] : []),
     { path:'/roads',          label:'Roads',           icon:Route },
     { path:'/incidents',      label:'Incidents',       icon:AlertTriangle },
     { path:'/deliveries',     label:'Deliveries',      icon:Package },
     { path:'/alerts',         label:'Alerts',          icon:Bell },
     { path:'/route-planner',   label:'Route Planner',   icon:Navigation },
-    { path:'/incident-report',  label:'Report Incident',  icon:Siren },
+    ...(isAdmin || role === 'FIELD_OFFICER' ? [{ path:'/incident-report', label:'Report Incident', icon:Siren }] : []),
     { path:'/critical-roads',  label:'Critical Roads',  icon:AlertOctagon },
   ];
 
