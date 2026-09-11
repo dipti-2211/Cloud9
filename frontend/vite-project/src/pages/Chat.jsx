@@ -2,9 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   MessageSquare, Send, Image as ImageIcon, Paperclip, X, Check, CheckCheck,
-  Search, ArrowLeft, AlertTriangle, Shield, User, Clock, RefreshCw
+  Search, ArrowLeft, AlertTriangle, Shield, User, Clock, RefreshCw, UserPlus, Plus
 } from 'lucide-react';
-import { chatAPI, auth } from '../services/api';
+import { chatAPI, auth, authAPI } from '../services/api';
 import { useSocket } from '../hooks/useSocket';
 import { PageHeader } from '../components/common/PageHeader';
 import { Badge } from '../components/common/Badge';
@@ -19,7 +19,7 @@ const QUICK_PROMPTS = [
 ];
 
 export const Chat = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { socket } = useSocket();
 
@@ -48,12 +48,21 @@ export const Chat = () => {
   const [sending, setSending] = useState(false);
   const [previewModalImg, setPreviewModalImg] = useState(null);
 
+  // New Officer Conversation Modal state
+  const [showNewOfficerModal, setShowNewOfficerModal] = useState(false);
+  const [availableOfficers, setAvailableOfficers] = useState([]);
+  const [loadingOfficers, setLoadingOfficers] = useState(false);
+  const [officerSearch, setOfficerSearch] = useState('');
+  const [customOfficerId, setCustomOfficerId] = useState('');
+  const [customOfficerName, setCustomOfficerName] = useState('');
+
   // Mobile navigation state
   const [showMobileChat, setShowMobileChat] = useState(false);
 
   const messagesContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const initialUrlHandledRef = useRef(false);
 
   // Read URL query params: ?incidentId=...&officer=...
   const queryIncidentId = searchParams.get('incidentId');
@@ -80,14 +89,15 @@ export const Chat = () => {
     });
   }, []);
 
-  // 1. Load conversations
-  const loadConversations = useCallback(async () => {
+  // 1. Load conversations (does NOT depend on activeConvId, never forces selection rollback)
+  const loadConversations = useCallback(async (preferredId = null) => {
     setLoadingThreads(true);
     try {
       let list = await chatAPI.getConversations();
 
-      // If user came from an incident link, ensure conversation exists
-      if (queryIncidentId || queryOfficer) {
+      // If user came from an incident link, handle on initial mount only
+      if (!initialUrlHandledRef.current && (queryIncidentId || queryOfficer)) {
+        initialUrlHandledRef.current = true;
         const existing = list.find(c =>
           (queryIncidentId && c.relatedIncidentId === queryIncidentId) ||
           (queryOfficer && c.fieldOfficerName?.toLowerCase().includes(queryOfficer.toLowerCase()))
@@ -109,8 +119,15 @@ export const Chat = () => {
             setShowMobileChat(true);
           }
         }
-      } else if (list.length > 0 && !activeConvId) {
-        setActiveConvId(list[0]._id);
+        // Clear search params so user can freely click previous chats without being locked to the incident!
+        setSearchParams({}, { replace: true });
+      } else if (preferredId) {
+        setActiveConvId(preferredId);
+      } else {
+        setActiveConvId(prevId => {
+          if (prevId && list.some(c => String(c._id) === String(prevId))) return prevId;
+          return list.length > 0 ? list[0]._id : null;
+        });
       }
 
       setConversations(list);
@@ -120,11 +137,87 @@ export const Chat = () => {
     } finally {
       setLoadingThreads(false);
     }
-  }, [queryIncidentId, queryOfficer, queryOfficerId, activeConvId]);
+  }, [queryIncidentId, queryOfficer, queryOfficerId, setSearchParams]);
 
   useEffect(() => {
     loadConversations();
   }, [loadConversations]);
+
+  // Open modal and fetch registered field officers
+  const handleOpenNewOfficerModal = async () => {
+    setShowNewOfficerModal(true);
+    setLoadingOfficers(true);
+    try {
+      const users = await authAPI.getUsers('FIELD_OFFICER');
+      const list = Array.isArray(users) ? users : [];
+      const demoOfficers = [
+        { userId: 'OFC-1042', firstName: 'Masoom', lastName: 'Singh', designation: 'Senior Field Geologist', district: 'Dima Hasao', postingLocation: 'Haflong Sector 4' },
+        { userId: 'OFC-3115', firstName: 'Sounak', lastName: 'Norbu', designation: 'Field Operations Commander', district: 'Papum Pare', postingLocation: 'Banderdewa Checkpoint' },
+        { userId: 'OFC-2088', firstName: 'Sagnik', lastName: 'Barman', designation: 'Regional Hazard Inspector', district: 'East Khasi Hills', postingLocation: 'Shillong Bypass Post' },
+        { userId: 'OFC-1099', firstName: 'Vikram', lastName: 'Sharma', designation: 'Corridor Patrol Lead', district: 'Senapati', postingLocation: 'NH-2 Checkpoint' },
+      ];
+      const merged = [...list];
+      demoOfficers.forEach(d => {
+        if (!merged.some(u => u.userId === d.userId)) merged.push(d);
+      });
+      setAvailableOfficers(merged);
+    } catch (err) {
+      console.error('Failed to load officers:', err);
+      setAvailableOfficers([
+        { userId: 'OFC-1042', firstName: 'Masoom', lastName: 'Singh', designation: 'Senior Field Geologist', district: 'Dima Hasao' },
+        { userId: 'OFC-3115', firstName: 'Sounak', lastName: 'Norbu', designation: 'Field Operations Commander', district: 'Papum Pare' },
+        { userId: 'OFC-2088', firstName: 'Sagnik', lastName: 'Barman', designation: 'Regional Hazard Inspector', district: 'East Khasi Hills' },
+      ]);
+    } finally {
+      setLoadingOfficers(false);
+    }
+  };
+
+  // Start chat with selected officer
+  const handleStartOfficerChat = async (officer) => {
+    try {
+      const officerId = officer.userId || officer._id || officer.id;
+      const officerName = `${officer.firstName || ''} ${officer.lastName || ''}`.trim() || officer.name || officer.userId || 'Field Officer';
+      const summary = officer.designation ? `${officer.designation} (${officer.district || 'NER'})` : (officer.district ? `District: ${officer.district}` : 'Field Operations');
+
+      const conv = await chatAPI.createOrGetConversation({
+        fieldOfficerId: officerId,
+        fieldOfficerName: officerName,
+        relatedIncidentId: null,
+        incidentSummary: summary,
+      });
+
+      if (conv) {
+        setConversations(prev => {
+          const exists = prev.some(c => String(c._id) === String(conv._id));
+          return exists ? prev : [conv, ...prev];
+        });
+        setActiveConvId(conv._id);
+        setShowMobileChat(true);
+        setSearchParams({}, { replace: true });
+        setShowNewOfficerModal(false);
+        toast.success(`Direct channel opened with ${officerName}!`, { icon: '💬' });
+      }
+    } catch (err) {
+      console.error('Failed to start officer chat:', err);
+      toast.error('Failed to start chat with officer');
+    }
+  };
+
+  // Quick custom officer connect
+  const handleQuickCustomChat = async (e) => {
+    e.preventDefault();
+    if (!customOfficerId.trim()) return;
+    await handleStartOfficerChat({
+      userId: customOfficerId.trim(),
+      firstName: customOfficerName.trim() || customOfficerId.trim(),
+      lastName: '',
+      designation: 'Field Unit',
+      district: 'Active Ops',
+    });
+    setCustomOfficerId('');
+    setCustomOfficerName('');
+  };
 
   // 2. Load messages when active conversation changes
   const loadMessages = useCallback(async (convId) => {
@@ -337,7 +430,7 @@ export const Chat = () => {
   };
 
   // Active conversation object
-  const activeConv = conversations.find(c => c._id === activeConvId);
+  const activeConv = conversations.find(c => String(c._id) === String(activeConvId));
 
   // Filter conversations
   const filteredConversations = conversations.filter(c =>
@@ -391,13 +484,40 @@ export const Chat = () => {
                   {isAdmin ? 'Field Officer Channels' : 'Control Room Line'}
                 </span>
               </div>
-              <button
-                onClick={loadConversations}
-                title="Refresh channels"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--slate)', display: 'flex' }}
-              >
-                <RefreshCw size={14} />
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={handleOpenNewOfficerModal}
+                  title="Start direct conversation with a Field Officer"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    background: 'var(--sky)',
+                    color: '#fff',
+                    border: 'none',
+                    fontSize: '0.74rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    boxShadow: '0 1px 3px rgba(2, 132, 199, 0.3)',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--sky-dark)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'var(--sky)'}
+                >
+                  <UserPlus size={13} />
+                  <span>+ New Chat</span>
+                </button>
+                <button
+                  onClick={() => loadConversations()}
+                  title="Refresh channels"
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--slate)', display: 'flex', padding: 3 }}
+                >
+                  <RefreshCw size={14} />
+                </button>
+              </div>
             </div>
 
             {isAdmin && (
@@ -434,7 +554,7 @@ export const Chat = () => {
               </div>
             ) : (
               filteredConversations.map(conv => {
-                const isSelected = conv._id === activeConvId;
+                const isSelected = String(conv._id) === String(activeConvId);
                 const unread = isAdmin ? (conv.unreadCountAdmin || 0) : (conv.unreadCountOfficer || 0);
 
                 return (
@@ -443,6 +563,7 @@ export const Chat = () => {
                     onClick={() => {
                       setActiveConvId(conv._id);
                       setShowMobileChat(true);
+                      setSearchParams({}, { replace: true });
                     }}
                     style={{
                       padding: '12px 14px',
@@ -455,7 +576,7 @@ export const Chat = () => {
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
                       <span style={{ fontWeight: 600, fontSize: '0.86rem', color: 'var(--ink)' }}>
-                        {conv.fieldOfficerName}
+                        {conv.fieldOfficerName && conv.fieldOfficerName.toLowerCase() !== 'admin' ? conv.fieldOfficerName : 'Field Officer (OFC-1042)'}
                       </span>
                       <span style={{ fontSize: '0.7rem', color: 'var(--slate)' }}>
                         {conv.lastMessageAt ? new Date(conv.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
@@ -555,7 +676,7 @@ export const Chat = () => {
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--ink)' }}>
-                        {activeConv.fieldOfficerName}
+                        {activeConv.fieldOfficerName && activeConv.fieldOfficerName.toLowerCase() !== 'admin' ? activeConv.fieldOfficerName : 'Field Officer (OFC-1042)'}
                       </span>
                       <span style={{
                         display: 'inline-flex',
@@ -903,6 +1024,347 @@ export const Chat = () => {
           )}
         </div>
       </div>
+
+      {/* Start Chat with New Officer Modal */}
+      {showNewOfficerModal && (
+        <div
+          className="modal-overlay"
+          onClick={() => setShowNewOfficerModal(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(5px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            className="modal-content"
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#ffffff',
+              borderRadius: 16,
+              width: '100%',
+              maxWidth: 580,
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.3)',
+              border: '1px solid var(--line)',
+              overflow: 'hidden',
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{
+              padding: '18px 22px',
+              borderBottom: '1px solid var(--line)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              background: '#f8fafc',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 10,
+                  background: 'var(--sky-tint)',
+                  border: '1px solid var(--sky-tint-2)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--sky-dark)',
+                }}>
+                  <UserPlus size={18} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--ink)' }}>
+                    Connect with Field Officer
+                  </h3>
+                  <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: 'var(--slate)' }}>
+                    Start direct, real-time communications with field personnel
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNewOfficerModal(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--slate)',
+                  cursor: 'pointer',
+                  padding: 6,
+                  borderRadius: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#e2e8f0'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Search Input */}
+            <div style={{ padding: '14px 22px', borderBottom: '1px solid var(--line)', background: '#ffffff' }}>
+              <div style={{ position: 'relative' }}>
+                <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--slate)' }} />
+                <input
+                  type="text"
+                  placeholder="Search by name, ID (e.g. OFC-1042), district, or role…"
+                  value={officerSearch}
+                  onChange={e => setOfficerSearch(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px 8px 36px',
+                    fontSize: '0.84rem',
+                    borderRadius: 8,
+                    border: '1px solid var(--line)',
+                    background: '#f8fafc',
+                    color: 'var(--ink)',
+                    outline: 'none',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onFocus={e => { e.currentTarget.style.borderColor = 'var(--sky)'; e.currentTarget.style.background = '#fff'; }}
+                  onBlur={e => { e.currentTarget.style.borderColor = 'var(--line)'; e.currentTarget.style.background = '#f8fafc'; }}
+                />
+                {officerSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setOfficerSearch('')}
+                    style={{
+                      position: 'absolute',
+                      right: 10,
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--slate)',
+                      cursor: 'pointer',
+                      padding: 2,
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Officer Roster List */}
+            <div style={{
+              flex: 1,
+              overflowY: 'auto',
+              maxHeight: 320,
+              padding: '8px 14px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}>
+              {loadingOfficers ? (
+                <div style={{ padding: '30px 0', textAlign: 'center', color: 'var(--slate)', fontSize: '0.85rem' }}>
+                  Loading field officers…
+                </div>
+              ) : (() => {
+                const q = officerSearch.toLowerCase().trim();
+                const filtered = availableOfficers.filter(o => {
+                  if (!q) return true;
+                  const fullName = `${o.firstName || ''} ${o.lastName || ''} ${o.name || ''}`.toLowerCase();
+                  const id = (o.userId || o._id || '').toLowerCase();
+                  const district = (o.district || '').toLowerCase();
+                  const designation = (o.designation || '').toLowerCase();
+                  const posting = (o.postingLocation || '').toLowerCase();
+                  return fullName.includes(q) || id.includes(q) || district.includes(q) || designation.includes(q) || posting.includes(q);
+                });
+
+                if (filtered.length === 0) {
+                  return (
+                    <div style={{ padding: '30px 10px', textAlign: 'center', color: 'var(--slate)' }}>
+                      <User size={32} style={{ opacity: 0.3, marginBottom: 8 }} />
+                      <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--ink)' }}>No field officers match "{officerSearch}"</div>
+                      <div style={{ fontSize: '0.78rem', marginTop: 4 }}>You can enter their Officer ID below to connect directly.</div>
+                    </div>
+                  );
+                }
+
+                return filtered.map((officer, idx) => {
+                  const officerId = officer.userId || officer._id || `OFC-${idx + 1}`;
+                  const officerName = `${officer.firstName || ''} ${officer.lastName || ''}`.trim() || officer.name || officerId;
+                  const initial = (officer.firstName?.[0] || officer.name?.[0] || officerId[0] || 'O').toUpperCase();
+                  const designation = officer.designation || 'Field Operational Officer';
+                  const location = officer.district ? `${officer.district}${officer.postingLocation ? ` • ${officer.postingLocation}` : ''}` : (officer.postingLocation || 'North-East Sector');
+
+                  return (
+                    <div
+                      key={officerId}
+                      style={{
+                        padding: '10px 14px',
+                        borderRadius: 10,
+                        border: '1px solid var(--line)',
+                        background: '#ffffff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        transition: 'all 0.15s ease',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--sky)'; e.currentTarget.style.background = '#f0f9ff'; }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--line)'; e.currentTarget.style.background = '#ffffff'; }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                        <div style={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: '50%',
+                          background: 'linear-gradient(135deg, #0284c7, #0369a1)',
+                          color: '#ffffff',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: 700,
+                          fontSize: '1rem',
+                          flexShrink: 0,
+                          boxShadow: '0 2px 5px rgba(2, 132, 199, 0.25)',
+                        }}>
+                          {initial}
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--ink)' }}>
+                              {officerName}
+                            </span>
+                            <span style={{
+                              fontSize: '0.68rem',
+                              fontWeight: 700,
+                              fontFamily: 'monospace',
+                              padding: '1px 6px',
+                              borderRadius: 4,
+                              background: '#e0f2fe',
+                              color: '#0369a1',
+                              border: '1px solid #bae6fd',
+                            }}>
+                              {officerId}
+                            </span>
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3,
+                              fontSize: '0.65rem',
+                              color: '#16a34a',
+                              fontWeight: 600,
+                            }}>
+                              <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#22c55e' }} /> Active
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--slate)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            <span style={{ color: '#475569', fontWeight: 500 }}>{designation}</span> · {location}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleStartOfficerChat(officer)}
+                        style={{
+                          padding: '7px 14px',
+                          borderRadius: 8,
+                          background: 'var(--sky)',
+                          color: '#ffffff',
+                          border: 'none',
+                          fontSize: '0.78rem',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          flexShrink: 0,
+                          boxShadow: '0 1px 3px rgba(2, 132, 199, 0.3)',
+                          transition: 'all 0.15s ease',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'var(--sky-dark)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'var(--sky)'; }}
+                      >
+                        <MessageSquare size={13} />
+                        <span>Chat</span>
+                      </button>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+
+            {/* Bottom: Direct Officer ID Connect */}
+            <div style={{
+              padding: '14px 20px',
+              borderTop: '1px solid var(--line)',
+              background: '#f8fafc',
+            }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--ink)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>Direct Connect by Officer ID</span>
+                <span style={{ fontSize: '0.7rem', color: 'var(--slate)', fontWeight: 400 }}>(enter any registered badge or radio code)</span>
+              </div>
+              <form onSubmit={handleQuickCustomChat} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="text"
+                  placeholder="Officer ID (e.g. OFC-4091)"
+                  value={customOfficerId}
+                  onChange={e => setCustomOfficerId(e.target.value)}
+                  required
+                  style={{
+                    flex: 1,
+                    padding: '7px 10px',
+                    fontSize: '0.8rem',
+                    borderRadius: 6,
+                    border: '1px solid var(--line)',
+                    background: '#fff',
+                    outline: 'none',
+                  }}
+                />
+                <input
+                  type="text"
+                  placeholder="Officer Name (optional)"
+                  value={customOfficerName}
+                  onChange={e => setCustomOfficerName(e.target.value)}
+                  style={{
+                    flex: 1,
+                    padding: '7px 10px',
+                    fontSize: '0.8rem',
+                    borderRadius: 6,
+                    border: '1px solid var(--line)',
+                    background: '#fff',
+                    outline: 'none',
+                  }}
+                />
+                <button
+                  type="submit"
+                  disabled={!customOfficerId.trim()}
+                  style={{
+                    padding: '7px 14px',
+                    borderRadius: 6,
+                    background: customOfficerId.trim() ? 'var(--sky)' : '#cbd5e1',
+                    color: '#fff',
+                    border: 'none',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: customOfficerId.trim() ? 'pointer' : 'not-allowed',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <Plus size={14} /> Connect
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Image Full Size Modal */}
       {previewModalImg && (

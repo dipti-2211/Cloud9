@@ -24,7 +24,7 @@ import toast from 'react-hot-toast';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Camera, X, MapPin, Loader, RefreshCw, Eye, MessageSquare } from 'lucide-react';
 import { useUserLocation } from '../hooks/useUserLocation';
-import { reverseGeocode, incidentsAPI } from '../services/api';
+import { reverseGeocode, incidentsAPI, auth } from '../services/api';
 import { useLang } from '../i18n/LanguageContext';
 import { useSocket } from '../hooks/useSocket';
 
@@ -61,7 +61,7 @@ const formatLiveIncident = (item) => {
   return {
     id: shortId,
     rawId: item._id || item.id,
-    officerName: item.field_officer_name || item.reportedBy || 'Field Officer',
+    officerName: item.field_officer_name || (item.reportedBy && !['admin', 'system administrator'].includes(item.reportedBy.toLowerCase()) ? item.reportedBy : 'Field Officer (OFC-1042)'),
     type: displayType,
     cause: cause,
     location: location,
@@ -247,6 +247,8 @@ const IncidentMapModal = ({ incident, onClose, onMessageOfficer }) => {
 export const Incidents = () => {
   const navigate = useNavigate();
   const { t } = useLang();
+  const user = auth.getUser();
+  const canReportIncident = user?.role === 'ADMIN' || user?.role === 'FIELD_OFFICER';
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [mapTarget, setMapTarget] = useState(null); // incident to view on map
   const [photoPreview, setPhotoPreview] = useState(null);
@@ -489,9 +491,11 @@ export const Incidents = () => {
             >
               <RefreshCw size={13} className={loadingLive ? 'spin' : ''} /> Refresh
             </button>
-            <button className="btn btn-primary" onClick={() => navigate('/incident-report')}>
-              + Report Incident
-            </button>
+            {canReportIncident && (
+              <button className="btn btn-primary" onClick={() => navigate('/incident-report')}>
+                + Report Incident
+              </button>
+            )}
           </div>
         }
       />

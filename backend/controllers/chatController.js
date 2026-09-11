@@ -170,13 +170,16 @@ exports.createOrGetConversation = async (req, res) => {
     const { fieldOfficerId, fieldOfficerName, relatedIncidentId, incidentSummary } = req.body;
 
     const targetOfficerId = fieldOfficerId || (user.role === "FIELD_OFFICER" ? (user._id || user.id) : "demo-ofc-001");
-    const targetOfficerName = fieldOfficerName || (user.role === "FIELD_OFFICER" ? (user.name || user.firstName) : "Field Officer");
+    let targetOfficerName = fieldOfficerName || (user.role === "FIELD_OFFICER" ? (user.name || user.firstName) : "Field Officer");
+    if (!targetOfficerName || ["admin", "system administrator"].includes(String(targetOfficerName).toLowerCase())) {
+      targetOfficerName = targetOfficerId && targetOfficerId !== "demo-ofc-001" ? targetOfficerId : "Field Officer (OFC-1042)";
+    }
 
     if (mongoose.connection.readyState === 1) {
-      let query = { fieldOfficerId: targetOfficerId };
-      if (relatedIncidentId) {
-        query.relatedIncidentId = relatedIncidentId;
-      }
+      let query = {
+        fieldOfficerId: targetOfficerId,
+        relatedIncidentId: relatedIncidentId || null,
+      };
 
       let conv = await Conversation.findOne(query);
       if (!conv) {
@@ -195,7 +198,8 @@ exports.createOrGetConversation = async (req, res) => {
     }
 
     // In-memory fallback
-    let conv = memConversations.find(c => c.fieldOfficerId === targetOfficerId && (!relatedIncidentId || c.relatedIncidentId === relatedIncidentId));
+    const matchIncident = relatedIncidentId || null;
+    let conv = memConversations.find(c => c.fieldOfficerId === targetOfficerId && (c.relatedIncidentId || null) === matchIncident);
     if (!conv) {
       conv = {
         _id: `conv-${Date.now()}`,
