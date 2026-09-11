@@ -595,6 +595,21 @@ tr:hover td { background-color: var(--sky-tint); }
   100% { box-shadow: 0 0 0 0    rgba(44,143,209,0); }
 }
 
+/* Start/End destination pin drop animation */
+@keyframes bounce-pin {
+  0%   { transform: translateY(-40px); opacity: 0; }
+  60%  { transform: translateY(6px);  opacity: 1; }
+  80%  { transform: translateY(-4px); }
+  100% { transform: translateY(0);    opacity: 1; }
+}
+
+/* Navigation vehicle arrow outer glow pulse */
+@keyframes nav-vehicle-pulse {
+  0%   { opacity: 1; }
+  50%  { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
 .demo-pin {
   width: 22px; height: 22px;
   border-radius: 50% 50% 50% 0;

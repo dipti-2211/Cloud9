@@ -171,8 +171,86 @@ const scoreRoute = (results) => {
 // Leaflet marker icons & helpers
 // ---------------------------------------------------------------------------
 const userIcon = L.divIcon({ className: 'user-location-marker', iconSize: [22, 22], iconAnchor: [11, 11] });
-const fromIcon = L.divIcon({ className: 'risk-marker risk-marker-low',  iconSize: [14, 14], iconAnchor: [7, 7] });
-const toIcon   = L.divIcon({ className: 'risk-marker risk-marker-high', iconSize: [14, 14], iconAnchor: [7, 7] });
+
+// Google Maps-style START marker (green teardrop with "A")
+const startIcon = L.divIcon({
+  className: '',
+  iconSize: [36, 48],
+  iconAnchor: [18, 48],
+  html: `<div style="
+    width: 36px; height: 48px;
+    position: relative;
+    filter: drop-shadow(0 4px 8px rgba(16,185,129,0.55));
+  ">
+    <svg viewBox="0 0 36 48" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
+      <path d="M18 0C8.06 0 0 8.06 0 18c0 13.5 18 30 18 30s18-16.5 18-30C36 8.06 27.94 0 18 0z" fill="#10b981"/>
+      <path d="M18 2C9.16 2 2 9.16 2 18c0 12.5 16 28 16 28S34 30.5 34 18C34 9.16 26.84 2 18 2z" fill="#059669"/>
+      <circle cx="18" cy="18" r="11" fill="white" fill-opacity="0.9"/>
+      <text x="18" y="23" font-family="'Inter','Arial',sans-serif" font-size="12" font-weight="800" fill="#059669" text-anchor="middle">A</text>
+    </svg>
+  </div>`,
+});
+
+// Google Maps-style END/DESTINATION marker (red teardrop with "B")
+const endIcon = L.divIcon({
+  className: '',
+  iconSize: [36, 48],
+  iconAnchor: [18, 48],
+  html: `<div style="
+    width: 36px; height: 48px;
+    position: relative;
+    filter: drop-shadow(0 4px 8px rgba(239,68,68,0.55));
+    animation: bounce-pin 0.6s ease 0.3s both;
+  ">
+    <svg viewBox="0 0 36 48" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
+      <path d="M18 0C8.06 0 0 8.06 0 18c0 13.5 18 30 18 30s18-16.5 18-30C36 8.06 27.94 0 18 0z" fill="#ef4444"/>
+      <path d="M18 2C9.16 2 2 9.16 2 18c0 12.5 16 28 16 28S34 30.5 34 18C34 9.16 26.84 2 18 2z" fill="#dc2626"/>
+      <circle cx="18" cy="18" r="11" fill="white" fill-opacity="0.9"/>
+      <text x="18" y="23" font-family="'Inter','Arial',sans-serif" font-size="12" font-weight="800" fill="#dc2626" text-anchor="middle">B</text>
+    </svg>
+  </div>`,
+});
+
+// Navigation vehicle icon — animated directional arrow (shown during navigation)
+const createVehicleIcon = (bearing = 0) => L.divIcon({
+  className: '',
+  iconSize: [40, 40],
+  iconAnchor: [20, 20],
+  html: `<div style="
+    width: 40px; height: 40px;
+    position: relative;
+    transform: rotate(${bearing}deg);
+    filter: drop-shadow(0 3px 10px rgba(37,99,235,0.7));
+  ">
+    <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
+      <circle cx="20" cy="20" r="19" fill="#2563eb" fill-opacity="0.18"/>
+      <circle cx="20" cy="20" r="13" fill="#2563eb"/>
+      <circle cx="20" cy="20" r="11" fill="#3b82f6"/>
+      <!-- Navigation arrow pointing up -->
+      <polygon points="20,7 27,28 20,23 13,28" fill="white"/>
+    </svg>
+  </div>`,
+});
+
+// Helper: find the index of the closest route point to a lat/lon
+const findClosestRouteIdx = (routeCoords, lat, lon) => {
+  let minDist = Infinity;
+  let minIdx = 0;
+  for (let i = 0; i < routeCoords.length; i++) {
+    const d = haversineM(lat, lon, routeCoords[i][0], routeCoords[i][1]);
+    if (d < minDist) { minDist = d; minIdx = i; }
+  }
+  return minIdx;
+};
+
+// Helper: compute bearing (degrees) from point A to point B
+const computeBearing = (lat1, lon1, lat2, lon2) => {
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
+  const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180)
+           - Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
+  return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+};
 
 // Hazard hotspot marker icon
 const createHazardPin = (riskLevel, isCrossed = false, isNew = false) => {
@@ -458,6 +536,11 @@ export const RoutePlanner = () => {
   const [navSteps,      setNavSteps     ] = useState([]);   // parsed step objects
   const [navRoute,      setNavRoute     ] = useState(null); // [lat,lon][] of selected route
 
+  // Vehicle position along route (Google Maps-style moving marker)
+  const [vehicleRouteIdx, setVehicleRouteIdx] = useState(0);  // index into navRoute
+  const [vehicleBearing,  setVehicleBearing ] = useState(0);  // direction in degrees
+  const [routeProgress,   setRouteProgress  ] = useState(0);  // 0–1 fraction completed
+
   // Phase 3: risk segment overlay + off-route rerouting
   const [riskSegments,  setRiskSegments ] = useState([]);   // [{lat,lon,category}] high-risk points
   const offRouteCount = useRef(0);                          // consecutive off-route GPS ticks
@@ -653,7 +736,7 @@ export const RoutePlanner = () => {
     }
     if (next !== currentStep) setCurrentStep(next);
 
-    // Off-route detection: if user is > 80m from every point on navRoute, count up
+    // Off-route detection: if user is >80m from every point on navRoute, count up
     if (navRoute) {
       const minDist = Math.min(
         ...navRoute.map(([rlat, rlon]) => haversineM(coords.lat, coords.lon, rlat, rlon))
@@ -672,6 +755,25 @@ export const RoutePlanner = () => {
       }
     }
   }, [coords, navigating, navSteps, currentStep, navRoute]);
+
+  // ---- Vehicle marker: update position & bearing along route on every GPS tick ----
+  useEffect(() => {
+    if (!navigating || !coords || !navRoute?.length) return;
+    const idx = findClosestRouteIdx(navRoute, coords.lat, coords.lon);
+    setVehicleRouteIdx(idx);
+    // Compute bearing: look ahead a few points for smoother heading
+    const lookAhead = Math.min(idx + 3, navRoute.length - 1);
+    if (lookAhead > idx) {
+      const bearing = computeBearing(
+        navRoute[idx][0], navRoute[idx][1],
+        navRoute[lookAhead][0], navRoute[lookAhead][1]
+      );
+      setVehicleBearing(bearing);
+    }
+    // Progress fraction
+    setRouteProgress(navRoute.length > 1 ? idx / (navRoute.length - 1) : 0);
+  }, [coords, navigating, navRoute]);
+
 
   // ---------------------------------------------------------------------------
   // Geocode handlers
@@ -801,6 +903,9 @@ export const RoutePlanner = () => {
     setNavSteps(routes[selectedIdx].steps);
     setNavRoute(routes[selectedIdx].coords);
     setCurrentStep(0);
+    setVehicleRouteIdx(0);
+    setVehicleBearing(0);
+    setRouteProgress(0);
     setFollowUser(true);
     setNavigating(true);
   };
@@ -808,6 +913,8 @@ export const RoutePlanner = () => {
   const stopNavigation = () => {
     setNavigating(false);
     setCurrentStep(0);
+    setVehicleRouteIdx(0);
+    setRouteProgress(0);
     setFollowUser(false);
   };
 
@@ -1074,9 +1181,30 @@ export const RoutePlanner = () => {
               </Marker>
             ))}
 
-            {/* ── Risk-colored route polyline (replaces single orange line) ── */}
+            {/* ── Route polylines: traveled (gray) + remaining (risk-colored) ── */}
+            {navRoute && navigating && vehicleRouteIdx > 0 && (
+              /* Traveled portion — desaturated gray to show progress */
+              <Polyline
+                positions={navRoute.slice(0, vehicleRouteIdx + 1)}
+                pathOptions={{
+                  color: '#9ca3af',
+                  weight: 6,
+                  opacity: 0.65,
+                  lineCap: 'round',
+                  lineJoin: 'round',
+                }}
+              />
+            )}
             {navRoute && (
-              <RiskPolyline routeCoords={navRoute} segments={liveSegments} />
+              /* Remaining portion (or full route if not navigating) */
+              <RiskPolyline
+                routeCoords={
+                  navigating && vehicleRouteIdx > 0
+                    ? navRoute.slice(vehicleRouteIdx)
+                    : navRoute
+                }
+                segments={liveSegments}
+              />
             )}
 
             {/* ── Safe detour — green dashed, shown when a safer alternative exists ── */}
@@ -1095,8 +1223,29 @@ export const RoutePlanner = () => {
               />
             )}
 
-            {/* "You are here" — live blue dot */}
-            {coords && (
+            {/* ── Vehicle marker: moves along route during navigation (replaces static blue dot) ── */}
+            {navigating && navRoute && navRoute[vehicleRouteIdx] && (
+              <Marker
+                position={navRoute[vehicleRouteIdx]}
+                icon={createVehicleIcon(vehicleBearing)}
+                zIndexOffset={1200}
+              >
+                <Popup>
+                  <div style={{ padding: '6px' }}>
+                    <div style={{ fontWeight: 700, marginBottom: 3 }}>🚗 Vehicle Position</div>
+                    <div style={{ fontSize: '0.78rem', color: '#555' }}>
+                      {navRoute[vehicleRouteIdx][0].toFixed(5)}, {navRoute[vehicleRouteIdx][1].toFixed(5)}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#2563eb', marginTop: 4, fontWeight: 600 }}>
+                      {Math.round(routeProgress * 100)}% of route completed
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            )}
+
+            {/* "You are here" — live blue dot (shown when NOT navigating) */}
+            {coords && !navigating && (
               <Marker position={[coords.lat, coords.lon]} icon={userIcon} zIndexOffset={1000}>
                 <Popup>
                   <div style={{ padding: '6px' }}>
@@ -1114,25 +1263,41 @@ export const RoutePlanner = () => {
               </Marker>
             )}
 
-            {/* From marker */}
-            {fromPlace && !fromPlace.display_name.startsWith('Your location') && (
-              <Marker position={[fromPlace.lat, fromPlace.lon]} icon={fromIcon}>
+            {/* ── START marker (Google Maps A-pin, green) ── */}
+            {fromPlace && (
+              <Marker position={[fromPlace.lat, fromPlace.lon]} icon={startIcon} zIndexOffset={1100}>
                 <Popup>
-                  <div style={{ padding: '4px' }}>
-                    <div style={{ fontWeight: 600, color: '#10b981', marginBottom: 2 }}>From</div>
-                    <div style={{ fontSize: '0.78rem' }}>{fromPlace.display_name}</div>
+                  <div style={{ padding: '4px 2px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                      <span style={{
+                        width: 22, height: 22, borderRadius: '50%',
+                        background: '#10b981', color: '#fff',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontWeight: 800, fontSize: '0.78rem', flexShrink: 0,
+                      }}>A</span>
+                      <strong style={{ color: '#059669', fontSize: '0.88rem' }}>Start</strong>
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: '#374151' }}>{fromPlace.display_name}</div>
                   </div>
                 </Popup>
               </Marker>
             )}
 
-            {/* To marker */}
+            {/* ── END marker (Google Maps B-pin, red) ── */}
             {toPlace && (
-              <Marker position={[toPlace.lat, toPlace.lon]} icon={toIcon}>
+              <Marker position={[toPlace.lat, toPlace.lon]} icon={endIcon} zIndexOffset={1100}>
                 <Popup>
-                  <div style={{ padding: '4px' }}>
-                    <div style={{ fontWeight: 600, color: '#ef4444', marginBottom: 2 }}>To</div>
-                    <div style={{ fontSize: '0.78rem' }}>{toPlace.display_name}</div>
+                  <div style={{ padding: '4px 2px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                      <span style={{
+                        width: 22, height: 22, borderRadius: '50%',
+                        background: '#ef4444', color: '#fff',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontWeight: 800, fontSize: '0.78rem', flexShrink: 0,
+                      }}>B</span>
+                      <strong style={{ color: '#dc2626', fontSize: '0.88rem' }}>Destination</strong>
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: '#374151' }}>{toPlace.display_name}</div>
                   </div>
                 </Popup>
               </Marker>
@@ -1192,6 +1357,23 @@ export const RoutePlanner = () => {
                 </div>
               )}
 
+              {/* Progress bar */}
+              <div style={{ margin: '10px 0 4px', background: 'var(--line)', borderRadius: 4, height: 5, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%',
+                  width: `${Math.round(routeProgress * 100)}%`,
+                  background: 'linear-gradient(90deg, #10b981, #2563eb)',
+                  borderRadius: 4,
+                  transition: 'width 0.6s ease',
+                  minWidth: routeProgress > 0 ? 8 : 0,
+                }} />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--slate)', marginBottom: 4 }}>
+                <span>🟢 Start</span>
+                <span style={{ fontWeight: 600, color: 'var(--sky)' }}>{Math.round(routeProgress * 100)}% completed</span>
+                <span>🔴 Destination</span>
+              </div>
+
               {/* HUD controls */}
               <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' }}>
                 <button
@@ -1228,6 +1410,10 @@ export const RoutePlanner = () => {
                 { color: '#f59e0b', label: 'Caution Road (▲ Instability)',   line: true },
                 { color: '#22c55e', label: 'Clear Route / Segment',          line: true },
                 { color: '#94a3b8', label: 'Alternate Route',                line: true, dash: true },
+                { color: '#9ca3af', label: 'Traveled Route (navigation)',     line: true },
+                { icon: '🟢', label: 'Start Point (A)' },
+                { icon: '🔴', label: 'Destination (B)' },
+                { icon: '🚗', label: 'Vehicle (live position)' },
                 { icon: '🚨', label: 'Reported Incident (Field Officer)' },
               ].map(({ color, label, line, dash, icon }) => (
                 <div key={label} style={{ display: 'flex', gap: '7px', alignItems: 'center', marginBottom: 4 }}>
