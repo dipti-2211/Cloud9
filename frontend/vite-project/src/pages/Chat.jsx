@@ -23,8 +23,18 @@ export const Chat = () => {
   const navigate = useNavigate();
   const { socket } = useSocket();
 
-  const user = auth.getUser();
-  const isAdmin = user?.role === 'ADMIN';
+  // Tab-isolated user session
+  const [currentUser, setCurrentUser] = useState(() => auth.getUser());
+
+  useEffect(() => {
+    const handleAuthChange = (e) => {
+      setCurrentUser(e.detail?.user ?? auth.getUser());
+    };
+    window.addEventListener('sih_auth_change', handleAuthChange);
+    return () => window.removeEventListener('sih_auth_change', handleAuthChange);
+  }, []);
+
+  const isAdmin = currentUser?.role === 'ADMIN';
 
   const [conversations, setConversations] = useState([]);
   const [activeConvId, setActiveConvId] = useState(null);
@@ -41,6 +51,7 @@ export const Chat = () => {
   // Mobile navigation state
   const [showMobileChat, setShowMobileChat] = useState(false);
 
+  const messagesContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -49,9 +60,25 @@ export const Chat = () => {
   const queryOfficer = searchParams.get('officer');
   const queryOfficerId = searchParams.get('officerId');
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  // Bulletproof scroll-to-bottom targeting container scrollTop
+  const scrollToBottom = useCallback((behavior = 'smooth') => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: messagesContainerRef.current.scrollHeight,
+        behavior,
+      });
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' });
+  }, []);
+
+  // Safe unique message appender
+  const appendUniqueMessage = useCallback((msg) => {
+    if (!msg || !msg._id) return;
+    setMessages(prev => {
+      if (prev.some(m => String(m._id) === String(msg._id))) return prev;
+      return [...prev, msg];
+    });
+  }, []);
 
   // 1. Load conversations
   const loadConversations = useCallback(async () => {
@@ -105,12 +132,14 @@ export const Chat = () => {
     setLoadingMessages(true);
     try {
       const msgs = await chatAPI.getMessages(convId);
-      setMessages(msgs);
-      setTimeout(scrollToBottom, 50);
+      setMessages(msgs || []);
+      // Scroll to bottom firmly on load
+      setTimeout(() => scrollToBottom('auto'), 40);
+      setTimeout(() => scrollToBottom('auto'), 160);
 
       // Reset unread on local conversation item
       setConversations(prev => prev.map(c => {
-        if (c._id === convId) {
+        if (String(c._id) === String(convId)) {
           return isAdmin ? { ...c, unreadCountAdmin: 0 } : { ...c, unreadCountOfficer: 0 };
         }
         return c;
@@ -120,7 +149,7 @@ export const Chat = () => {
     } finally {
       setLoadingMessages(false);
     }
-  }, [isAdmin]);
+  }, [isAdmin, scrollToBottom]);
 
   useEffect(() => {
     if (activeConvId) {
@@ -128,35 +157,50 @@ export const Chat = () => {
     }
   }, [activeConvId, loadMessages]);
 
+  // Auto-scroll whenever messages array length changes
+  useEffect(() => {
+    if (messages.length > 0) {
+      scrollToBottom('smooth');
+    }
+  }, [messages.length, scrollToBottom]);
+
   // 3. Socket.io Room join/leave and message listener
   useEffect(() => {
     const s = socket?.current || socket;
     if (!s || !activeConvId) return;
 
+    const convIdStr = String(activeConvId);
+
     if (typeof s.emit === 'function') {
-      s.emit('join_conversation', activeConvId);
+      s.emit('join_conversation', convIdStr);
     }
 
+    const onConnect = () => {
+      s.emit('join_conversation', convIdStr);
+    };
+
     const handleChatMessage = (newMsg) => {
-      if (newMsg.conversationId === activeConvId) {
-        setMessages(prev => {
-          if (prev.some(m => m._id === newMsg._id)) return prev;
-          return [...prev, newMsg];
-        });
-        setTimeout(scrollToBottom, 50);
+      if (String(newMsg?.conversationId) === convIdStr) {
+        appendUniqueMessage(newMsg);
+        setTimeout(() => scrollToBottom('smooth'), 50);
       }
     };
 
     const handleGlobalChat = ({ conversationId, message }) => {
+      const targetIdStr = String(conversationId);
+      if (targetIdStr === convIdStr && message) {
+        appendUniqueMessage(message);
+        setTimeout(() => scrollToBottom('smooth'), 50);
+      }
       setConversations(prev => {
         return prev.map(c => {
-          if (c._id === conversationId) {
+          if (String(c._id) === targetIdStr) {
             return {
               ...c,
               lastMessage: message.text || (message.attachmentUrl ? '📷 Photo attached' : 'New message'),
               lastMessageAt: message.createdAt || new Date(),
-              unreadCountAdmin: (!isAdmin || conversationId === activeConvId) ? c.unreadCountAdmin : (c.unreadCountAdmin || 0) + 1,
-              unreadCountOfficer: (isAdmin || conversationId === activeConvId) ? c.unreadCountOfficer : (c.unreadCountOfficer || 0) + 1,
+              unreadCountAdmin: (!isAdmin || targetIdStr === convIdStr) ? c.unreadCountAdmin : (c.unreadCountAdmin || 0) + 1,
+              unreadCountOfficer: (isAdmin || targetIdStr === convIdStr) ? c.unreadCountOfficer : (c.unreadCountOfficer || 0) + 1,
             };
           }
           return c;
@@ -165,22 +209,24 @@ export const Chat = () => {
     };
 
     if (typeof s.on === 'function') {
+      s.on('connect', onConnect);
       s.on('chat_message', handleChatMessage);
       s.on('new_chat_message', handleGlobalChat);
     }
 
     return () => {
       if (typeof s.emit === 'function') {
-        s.emit('leave_conversation', activeConvId);
+        s.emit('leave_conversation', convIdStr);
       }
       if (typeof s.off === 'function') {
+        s.off('connect', onConnect);
         s.off('chat_message', handleChatMessage);
         s.off('new_chat_message', handleGlobalChat);
       }
     };
-  }, [socket, activeConvId, isAdmin]);
+  }, [socket, activeConvId, isAdmin, appendUniqueMessage, scrollToBottom]);
 
-  // 4. Send message handler
+  // 4. Send message handler (typed text or quick prompt)
   const handleSendMessage = async (customText = null) => {
     const textToSend = typeof customText === 'string' ? customText : inputText;
     if (!textToSend.trim() && !selectedFile) return;
@@ -188,33 +234,35 @@ export const Chat = () => {
 
     setSending(true);
     try {
+      const senderRole = currentUser?.role || (isAdmin ? 'ADMIN' : 'FIELD_OFFICER');
+      const senderName = currentUser?.name || (isAdmin ? 'Command Control Admin' : (currentUser?.firstName || 'Field Officer'));
+
       let payload;
       if (selectedFile) {
         const fd = new FormData();
         fd.append('text', textToSend.trim());
-        fd.append('senderRole', user?.role || 'ADMIN');
-        fd.append('senderName', user?.name || (isAdmin ? 'Command Control Admin' : 'Field Officer'));
+        fd.append('senderRole', senderRole);
+        fd.append('senderName', senderName);
         fd.append('attachment', selectedFile);
         payload = fd;
       } else {
         payload = {
           text: textToSend.trim(),
-          senderRole: user?.role || 'ADMIN',
-          senderName: user?.name || (isAdmin ? 'Command Control Admin' : 'Field Officer'),
+          senderRole,
+          senderName,
         };
       }
 
       const sent = await chatAPI.sendMessage(activeConvId, payload);
       if (sent) {
-        setMessages(prev => [...prev, sent]);
+        appendUniqueMessage(sent);
         setInputText('');
-        setSelectedFile(null);
-        setFilePreview(null);
-        setTimeout(scrollToBottom, 50);
+        clearSelectedFile();
+        setTimeout(() => scrollToBottom('smooth'), 50);
 
         // Update local conversation lastMessage
         setConversations(prev => prev.map(c => {
-          if (c._id === activeConvId) {
+          if (String(c._id) === String(activeConvId)) {
             return {
               ...c,
               lastMessage: sent.text || '📷 Photo attached',
@@ -229,6 +277,38 @@ export const Chat = () => {
       toast.error('Failed to deliver message');
     } finally {
       setSending(false);
+    }
+  };
+
+  // Quick switch role in this tab only (ideal for 2-tab testing)
+  const handleQuickRoleSwitch = async (targetRole) => {
+    try {
+      if (targetRole === 'FIELD_OFFICER') {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: 'OFC-1042', password: 'officer123', role: 'FIELD_OFFICER' })
+        });
+        const data = await res.json();
+        if (data.token) {
+          auth.setSession(data.token, data.user || { role: 'FIELD_OFFICER', userId: 'OFC-1042', name: 'Masoom Singh' });
+          toast.success('Switched this tab to Field Officer (Masoom Singh)');
+        }
+      } else {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: 'admin', password: 'admin123', role: 'ADMIN' })
+        });
+        const data = await res.json();
+        if (data.token) {
+          auth.setSession(data.token, data.user || { role: 'ADMIN', userId: 'admin', name: 'System Administrator' });
+          toast.success('Switched this tab to Command Center Admin');
+        }
+      }
+    } catch (err) {
+      console.error('Role switch error:', err);
+      toast.error('Failed to switch role');
     }
   };
 
@@ -431,6 +511,9 @@ export const Chat = () => {
             flexDirection: 'column',
             background: '#fafbfc',
             minWidth: 0,
+            height: '100%',
+            minHeight: 0,
+            overflow: 'hidden',
           }}
           className={`chat-main-pane ${!showMobileChat ? 'hidden-mobile-pane' : ''}`}
         >
@@ -446,6 +529,9 @@ export const Chat = () => {
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+                  flexShrink: 0,
+                  zIndex: 20,
+                  position: 'relative',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -493,46 +579,88 @@ export const Chat = () => {
                   </div>
                 </div>
 
+                {/* Right Action: Active Identity & Tab Role Switcher */}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <Badge>{isAdmin ? 'Command Center Admin' : 'Field Officer'}</Badge>
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '4px 10px',
+                    borderRadius: 8,
+                    background: isAdmin ? 'rgba(124,58,237,0.08)' : 'var(--sky-tint)',
+                    border: `1px solid ${isAdmin ? 'rgba(124,58,237,0.2)' : 'var(--sky-tint-2)'}`,
+                  }}>
+                    {isAdmin ? <Shield size={14} color="#7C3AED" /> : <User size={14} color="var(--sky-dark)" />}
+                    <span style={{ fontSize: '0.76rem', fontWeight: 700, color: isAdmin ? '#6D28D9' : 'var(--sky-dark)' }}>
+                      {isAdmin ? 'Admin Session' : 'Officer Session'}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleQuickRoleSwitch(isAdmin ? 'FIELD_OFFICER' : 'ADMIN')}
+                    title={`Switch this tab's role to ${isAdmin ? 'Field Officer (OFC-1042)' : 'Command Admin'}`}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 7,
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      background: 'var(--white)',
+                      border: '1px solid var(--line)',
+                      color: 'var(--slate)',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--sky)'; e.currentTarget.style.color = 'var(--sky-dark)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--line)'; e.currentTarget.style.color = 'var(--slate)'; }}
+                  >
+                    Switch to {isAdmin ? 'Officer' : 'Admin'} Tab
+                  </button>
                 </div>
               </div>
 
               {/* Quick Assessment Prompts (Admin & Officer inquiry shortcuts) */}
               <div
                 style={{
-                  padding: '8px 16px',
-                  background: 'var(--sky-tint)',
+                  padding: '9px 18px',
+                  background: '#ffffff',
                   borderBottom: '1px solid var(--line)',
                   display: 'flex',
-                  gap: 6,
+                  alignItems: 'center',
+                  gap: 8,
                   overflowX: 'auto',
                   whiteSpace: 'nowrap',
                   scrollbarWidth: 'none',
+                  flexShrink: 0,
+                  position: 'relative',
+                  zIndex: 15,
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.02)',
                 }}
               >
-                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--sky-dark)', alignSelf: 'center', marginRight: 4 }}>
+                <span style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--sky-dark)', alignSelf: 'center', marginRight: 4, flexShrink: 0 }}>
                   Inquiry Prompts:
                 </span>
                 {QUICK_PROMPTS.map((prompt, idx) => (
                   <button
                     key={idx}
+                    type="button"
                     onClick={() => handleSendMessage(prompt)}
                     disabled={sending}
                     style={{
-                      background: 'var(--white)',
+                      background: '#f8fafc',
                       border: '1px solid var(--line)',
-                      borderRadius: 14,
-                      padding: '4px 10px',
+                      borderRadius: 16,
+                      padding: '5px 12px',
                       fontSize: '0.74rem',
-                      fontWeight: 500,
+                      fontWeight: 600,
                       color: 'var(--ink)',
                       cursor: 'pointer',
                       flexShrink: 0,
-                      transition: 'border-color 0.15s, background 0.15s',
+                      transition: 'all 0.15s ease',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.02)',
                     }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--sky)'; e.currentTarget.style.background = 'var(--sky-tint-2)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--line)'; e.currentTarget.style.background = 'var(--white)'; }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--sky)'; e.currentTarget.style.background = 'var(--sky-tint)'; e.currentTarget.style.color = 'var(--sky-dark)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--line)'; e.currentTarget.style.background = '#f8fafc'; e.currentTarget.style.color = 'var(--ink)'; }}
                   >
                     + {prompt}
                   </button>
@@ -540,20 +668,39 @@ export const Chat = () => {
               </div>
 
               {/* Messages Stream */}
-              <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div
+                ref={messagesContainerRef}
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflowY: 'auto',
+                  padding: '18px 20px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                  scrollBehavior: 'smooth',
+                }}
+              >
                 {loadingMessages ? (
                   <div style={{ textAlign: 'center', padding: 30, color: 'var(--slate)', fontSize: '0.85rem' }}>
                     Loading message stream…
                   </div>
                 ) : messages.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--slate)' }}>
-                    <MessageSquare size={32} style={{ opacity: 0.3, marginBottom: 8 }} />
-                    <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>No messages in this channel yet</div>
-                    <div style={{ fontSize: '0.78rem', marginTop: 4 }}>Send a message or select an assessment prompt above.</div>
+                  <div style={{ textAlign: 'center', padding: '50px 20px', color: 'var(--slate)' }}>
+                    <MessageSquare size={36} style={{ opacity: 0.3, marginBottom: 10 }} />
+                    <div style={{ fontWeight: 700, fontSize: '0.92rem', color: 'var(--ink)' }}>No messages in this channel yet</div>
+                    <div style={{ fontSize: '0.8rem', marginTop: 4 }}>Send a message or select an assessment prompt above.</div>
                   </div>
                 ) : (
                   messages.map((m, idx) => {
-                    const isSelf = (m.senderRole === 'ADMIN' && isAdmin) || (m.senderRole === 'FIELD_OFFICER' && !isAdmin);
+                    const isSelf = (m.senderRole === currentUser?.role) ||
+                      (String(m.senderId) === String(currentUser?._id || currentUser?.id || currentUser?.userId));
+
+                    // Check consecutive same-sender grouping
+                    const prevMsg = idx > 0 ? messages[idx - 1] : null;
+                    const isSameSenderAsPrev = prevMsg &&
+                      prevMsg.senderRole === m.senderRole &&
+                      (prevMsg.senderName === m.senderName || String(prevMsg.senderId) === String(m.senderId));
 
                     return (
                       <div
@@ -562,26 +709,44 @@ export const Chat = () => {
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: isSelf ? 'flex-end' : 'flex-start',
-                          maxWidth: '82%',
+                          maxWidth: '78%',
                           alignSelf: isSelf ? 'flex-end' : 'flex-start',
+                          marginTop: isSameSenderAsPrev ? 2 : 12,
                         }}
                       >
-                        {/* Sender Label */}
-                        <div style={{ fontSize: '0.7rem', color: 'var(--slate)', marginBottom: 3, padding: '0 4px' }}>
-                          {m.senderName} ({m.senderRole === 'ADMIN' ? 'Admin' : 'Officer'})
-                        </div>
+                        {/* Show Sender Label only if NOT consecutive from same sender */}
+                        {!isSameSenderAsPrev && (
+                          <div style={{
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            color: isSelf ? 'var(--sky-dark)' : 'var(--slate)',
+                            marginBottom: 4,
+                            padding: '0 6px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                          }}>
+                            {isSelf ? (
+                              <span>You ({m.senderRole === 'ADMIN' ? 'Admin' : 'Field Officer'})</span>
+                            ) : (
+                              <span>{m.senderName} ({m.senderRole === 'ADMIN' ? 'Admin' : 'Officer'})</span>
+                            )}
+                          </div>
+                        )}
 
                         {/* Bubble */}
                         <div
                           style={{
-                            padding: '10px 14px',
-                            borderRadius: isSelf ? '14px 14px 2px 14px' : '14px 14px 14px 2px',
+                            padding: '9px 14px',
+                            borderRadius: isSelf
+                              ? (isSameSenderAsPrev ? '14px 4px 4px 14px' : '14px 14px 4px 14px')
+                              : (isSameSenderAsPrev ? '4px 14px 14px 4px' : '14px 14px 14px 4px'),
                             background: isSelf
                               ? 'linear-gradient(135deg, #1e6fa8 0%, #2c8fd1 100%)'
                               : 'var(--white)',
                             color: isSelf ? '#ffffff' : 'var(--ink)',
                             border: isSelf ? 'none' : '1px solid var(--line)',
-                            boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.04)',
                             fontSize: '0.86rem',
                             lineHeight: 1.45,
                             wordBreak: 'break-word',
@@ -591,9 +756,9 @@ export const Chat = () => {
                           {m.attachmentUrl && (
                             <div style={{ marginBottom: m.text ? 8 : 0 }}>
                               <img
-                                src={m.attachmentUrl.startsWith('http') ? m.attachmentUrl : `http://localhost:5000${m.attachmentUrl}`}
+                                src={m.attachmentUrl.startsWith('http') ? m.attachmentUrl : `http://localhost:1710${m.attachmentUrl}`}
                                 alt="Chat attachment"
-                                onClick={() => setPreviewModalImg(m.attachmentUrl.startsWith('http') ? m.attachmentUrl : `http://localhost:5000${m.attachmentUrl}`)}
+                                onClick={() => setPreviewModalImg(m.attachmentUrl.startsWith('http') ? m.attachmentUrl : `http://localhost:1710${m.attachmentUrl}`)}
                                 style={{
                                   maxWidth: '100%',
                                   maxHeight: 240,
@@ -610,7 +775,15 @@ export const Chat = () => {
                         </div>
 
                         {/* Timestamp & Read Receipt */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.66rem', color: 'var(--slate)', marginTop: 2, padding: '0 4px' }}>
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          fontSize: '0.66rem',
+                          color: 'var(--slate)',
+                          marginTop: 2,
+                          padding: '0 4px',
+                        }}>
                           <span>{m.createdAt ? new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}</span>
                           {isSelf && <CheckCheck size={12} color="var(--sky)" />}
                         </div>
@@ -618,7 +791,7 @@ export const Chat = () => {
                     );
                   })
                 )}
-                <div ref={messagesEndRef} />
+                <div ref={messagesEndRef} style={{ height: 1, flexShrink: 0 }} />
               </div>
 
               {/* File preview bar before sending */}

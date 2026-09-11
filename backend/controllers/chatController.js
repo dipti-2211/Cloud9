@@ -327,8 +327,8 @@ exports.sendMessage = async (req, res) => {
     // Broadcast via socket.io
     const io = req.app.get("io");
     if (io) {
-      io.to(`conversation:${id}`).emit("chat_message", savedMessage);
-      io.emit("new_chat_message", { conversationId: id, message: savedMessage });
+      io.to(`conversation:${String(id)}`).emit("chat_message", savedMessage);
+      io.emit("new_chat_message", { conversationId: String(id), message: savedMessage });
     }
 
     return res.status(201).json({ success: true, message: savedMessage });

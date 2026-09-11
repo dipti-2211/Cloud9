@@ -3,6 +3,7 @@
  * Admin: sees Admin Approvals panel
  * Field Officer / Vehicle Operator: sees only their relevant sections
  */
+import { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Truck, Route, AlertTriangle, Package,
@@ -30,7 +31,16 @@ const NavItem = ({ path, label, icon: Icon, onClick, title }) => (
 );
 
 export const Sidebar = ({ collapsed = false, isMobile = false, onClose }) => {
-  const user    = auth.getUser();
+  const [user, setUser] = useState(() => auth.getUser());
+
+  useEffect(() => {
+    const handleAuthChange = (e) => {
+      setUser(e.detail?.user ?? auth.getUser());
+    };
+    window.addEventListener('sih_auth_change', handleAuthChange);
+    return () => window.removeEventListener('sih_auth_change', handleAuthChange);
+  }, []);
+
   const role    = user?.role ?? '';
   const isAdmin = role === 'ADMIN';
 

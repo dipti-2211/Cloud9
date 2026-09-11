@@ -21,7 +21,7 @@ export const LanguageProvider = ({ children }) => {
   );
 
   const setLang = useCallback((l) => {
-    const next = l === 'hi' ? 'hi' : 'en';
+    const next = (l === 'hi' || l === 'bn') ? l : 'en';
     localStorage.setItem('sih_lang', next);
     setLangState(next);
   }, []);

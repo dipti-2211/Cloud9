@@ -117,11 +117,11 @@ io.on("connection", (socket) => {
     if (vehicleId) socket.join(`vehicle:${vehicleId}`);
 
     socket.on("join_conversation", (conversationId) => {
-        if (conversationId) socket.join(`conversation:${conversationId}`);
+        if (conversationId) socket.join(`conversation:${String(conversationId)}`);
     });
 
     socket.on("leave_conversation", (conversationId) => {
-        if (conversationId) socket.leave(`conversation:${conversationId}`);
+        if (conversationId) socket.leave(`conversation:${String(conversationId)}`);
     });
 
     socket.on("disconnect", () => { /* cleanup if needed */ });

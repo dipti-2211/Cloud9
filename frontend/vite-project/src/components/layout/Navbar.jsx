@@ -139,7 +139,16 @@ export const Navbar = ({ onToggleSidebar, sidebarCollapsed }) => {
   const { lang, setLang } = useLang();
 
   const { socket } = useSocket();
-  const user = auth.getUser();
+  const [user, setUser] = useState(() => auth.getUser());
+
+  useEffect(() => {
+    const handleAuthChange = (e) => {
+      setUser(e.detail?.user ?? auth.getUser());
+    };
+    window.addEventListener('sih_auth_change', handleAuthChange);
+    return () => window.removeEventListener('sih_auth_change', handleAuthChange);
+  }, []);
+
   const isAdmin = user?.role === 'ADMIN';
   const displayName = user?.name || (user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : user?.firstName || user?.userId || 'Administrator');
   const roleLabel = { ADMIN:'Admin', FIELD_OFFICER:'Field Officer', VEHICLE_OPERATOR:'Vehicle Operator' }[user?.role] ?? user?.role ?? 'User';
@@ -223,58 +232,30 @@ export const Navbar = ({ onToggleSidebar, sidebarCollapsed }) => {
       </div>
 
       <div style={{ display:'flex', alignItems:'center', gap:'16px' }}>
-        {/* Quick Test Alert trigger for demo */}
-        <button
-          type="button"
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent('incident_created', {
-              detail: {
-                id: `demo-${Date.now()}`,
-                incident_type: 'Landslide',
-                road_name: 'NH-2 (Senapati District)',
-                district: 'Senapati',
-                road_block: 'full',
-                field_officer_name: 'Inspector Vikram Singh',
-                slope: 34,
-                rainfall_mm: 125,
-                description: 'Active slope failure observed at km 114. Boulders & heavy debris blocking both lanes. Dynamic reroute active.',
-                location: { coordinates: [94.024, 25.265] },
-              },
-            }));
-          }}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: '5px',
-            padding: '4px 10px', borderRadius: '7px',
-            background: 'rgba(239, 68, 68, 0.1)', color: '#dc2626',
-            border: '1px solid rgba(239, 68, 68, 0.35)',
-            fontWeight: 700, fontSize: '0.74rem', cursor: 'pointer',
-            transition: 'all 0.15s ease',
-          }}
-          title="Trigger Demo Hazard Alert Notification"
-        >
-          <span>🚨</span> Test Alert
-        </button>
-
         {/* SYSTEM OPERATIONAL */}
         <div style={{ display:'flex', alignItems:'center', gap:'6px', color:'var(--success)', fontSize:'0.78rem', fontWeight:700 }}>
           <Activity size={13} />
           <span className="hide-sm">SYSTEM OPERATIONAL</span>
         </div>
 
-        {/* EN / HI language toggle */}
+        {/* EN / HI / BN language toggle */}
         <div style={{ display:'flex', alignItems:'center', gap:'2px', background:'var(--sky-tint)', border:'1px solid var(--sky-tint-2)', borderRadius:7, padding:'2px 3px' }}>
-          {['en', 'hi'].map(l => (
+          {[
+            { code: 'en', label: 'EN' },
+            { code: 'hi', label: 'हि' },
+            { code: 'bn', label: 'বাংলা' },
+          ].map(({ code, label }) => (
             <button
-              key={l}
-              onClick={() => setLang(l)}
+              key={code}
+              onClick={() => setLang(code)}
               style={{
                 padding:'3px 9px', borderRadius:5, border:'none', cursor:'pointer',
-                fontSize:'0.72rem', fontWeight:700, letterSpacing:'0.04em', textTransform:'uppercase',
-                background: lang === l ? 'var(--sky-dark)' : 'transparent',
-                color:      lang === l ? '#fff' : 'var(--slate)',
+                fontSize:'0.72rem', fontWeight:700, letterSpacing:'0.02em',
+                background: lang === code ? 'var(--sky-dark)' : 'transparent',
+                color:      lang === code ? '#fff' : 'var(--slate)',
                 transition: 'background .15s, color .15s',
               }}
-            >{l === 'en' ? 'EN' : 'हि'}</button>
+            >{label}</button>
           ))}
         </div>
 
