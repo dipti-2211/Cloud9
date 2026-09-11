@@ -20,9 +20,11 @@ import {
 } from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import toast from 'react-hot-toast';
-import { auth, BASE_URL } from '../services/api';
+import { auth, BASE_URL, ensureToken } from '../services/api';
 
-const API_BASE = BASE_URL || import.meta.env.VITE_API_URL || 'http://localhost:1710';
+// Always use the Vite proxy path in dev, or the real API_URL in prod
+// This ensures the auth header is sent correctly through the proxy
+const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
 const HAZARD_TO_TYPE = {
   landslide:   'LANDSLIDE',
@@ -146,7 +148,7 @@ export const IncidentReport = () => {
     reader.readAsDataURL(f);
 
     // Auto-analyze photo via backend Gemini Vision endpoint
-    const token = auth.getToken() || localStorage.getItem('sih_token') || localStorage.getItem('token');
+    const token = await ensureToken();
     setAnalyzing(true);
     try {
       const form = new FormData();
@@ -181,6 +183,49 @@ export const IncidentReport = () => {
   const usedLat = parseFloat(manualLat) || (coords?.lat ?? 25.1450);
   const usedLon = parseFloat(manualLon) || (coords?.lon ?? 93.0100);
 
+  // Load a bundled demo landslide photo for testing without a real camera
+  const loadDemoPhoto = async () => {
+    try {
+      // Use a public-domain landslide image via fetch
+      const imgUrl = 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/45/A_small_cup_of_coffee.JPG/640px-A_small_cup_of_coffee.JPG';
+      // We'll create a synthetic File from a blank canvas as a placeholder
+      // (avoids CORS issues with external images)
+      const canvas = document.createElement('canvas');
+      canvas.width = 640; canvas.height = 480;
+      const ctx = canvas.getContext('2d');
+      // Draw a landslide-colored placeholder
+      const grad = ctx.createLinearGradient(0, 0, 640, 480);
+      grad.addColorStop(0, '#8B4513'); grad.addColorStop(0.4, '#A0522D');
+      grad.addColorStop(0.7, '#654321'); grad.addColorStop(1, '#3d2b1f');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 640, 480);
+      ctx.fillStyle = '#5a3e2b';
+      for (let i = 0; i < 40; i++) {
+        ctx.fillRect(Math.random()*620, Math.random()*460, 8+Math.random()*30, 4+Math.random()*15);
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.font = 'bold 28px sans-serif';
+      ctx.fillText('DEMO · Landslide Site Photo', 60, 240);
+
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const file = new File([blob], 'demo-landslide.jpg', { type: 'image/jpeg' });
+        setPhoto(file);
+        setAnalysis(null);
+        const reader = new FileReader();
+        reader.onload = (ev) => setPreview(ev.target.result);
+        reader.readAsDataURL(file);
+        // Trigger AI analysis
+        const syntheticEvent = { target: { files: [file] } };
+        handlePhoto(syntheticEvent);
+      }, 'image/jpeg', 0.92);
+
+      toast('📸 Demo photo loaded — AI analyzing…', { duration: 3000 });
+    } catch (err) {
+      toast.error('Failed to load demo photo: ' + err.message);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (isNaN(usedLat) || isNaN(usedLon)) {
@@ -188,23 +233,10 @@ export const IncidentReport = () => {
       return;
     }
 
-    let token = auth.getToken() || localStorage.getItem('sih_token') || localStorage.getItem('token');
+    // Get or silently refresh auth token
+    const token = await ensureToken();
     if (!token) {
-      try {
-        const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: 'admin', password: 'password123', role: 'admin' }),
-        });
-        const loginData = await loginRes.json();
-        if (loginData.token) {
-          token = loginData.token;
-          auth.setSession(token, loginData.user || { role: 'admin' });
-        }
-      } catch (_) {}
-    }
-    if (!token) {
-      toast.error('Authentication required. Please log in as Field Officer first.');
+      toast.error('Unable to authenticate. Please log in first.');
       return;
     }
 

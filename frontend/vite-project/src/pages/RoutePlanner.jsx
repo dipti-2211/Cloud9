@@ -172,7 +172,7 @@ const scoreRoute = (results) => {
 // ---------------------------------------------------------------------------
 const userIcon = L.divIcon({ className: 'user-location-marker', iconSize: [22, 22], iconAnchor: [11, 11] });
 
-// Google Maps-style START marker (green teardrop with "A")
+// Google Maps-style START marker — clean green teardrop, no label
 const startIcon = L.divIcon({
   className: '',
   iconSize: [36, 48],
@@ -185,13 +185,13 @@ const startIcon = L.divIcon({
     <svg viewBox="0 0 36 48" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
       <path d="M18 0C8.06 0 0 8.06 0 18c0 13.5 18 30 18 30s18-16.5 18-30C36 8.06 27.94 0 18 0z" fill="#10b981"/>
       <path d="M18 2C9.16 2 2 9.16 2 18c0 12.5 16 28 16 28S34 30.5 34 18C34 9.16 26.84 2 18 2z" fill="#059669"/>
-      <circle cx="18" cy="18" r="11" fill="white" fill-opacity="0.9"/>
-      <text x="18" y="23" font-family="'Inter','Arial',sans-serif" font-size="12" font-weight="800" fill="#059669" text-anchor="middle">A</text>
+      <circle cx="18" cy="18" r="8" fill="white" fill-opacity="0.95"/>
+      <circle cx="18" cy="18" r="4" fill="#059669"/>
     </svg>
   </div>`,
 });
 
-// Google Maps-style END/DESTINATION marker (red teardrop with "B")
+// Google Maps-style DESTINATION marker — blue teardrop, white dot center (no label)
 const endIcon = L.divIcon({
   className: '',
   iconSize: [36, 48],
@@ -199,38 +199,39 @@ const endIcon = L.divIcon({
   html: `<div style="
     width: 36px; height: 48px;
     position: relative;
-    filter: drop-shadow(0 4px 8px rgba(239,68,68,0.55));
+    filter: drop-shadow(0 4px 8px rgba(59,130,246,0.6));
     animation: bounce-pin 0.6s ease 0.3s both;
   ">
     <svg viewBox="0 0 36 48" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
-      <path d="M18 0C8.06 0 0 8.06 0 18c0 13.5 18 30 18 30s18-16.5 18-30C36 8.06 27.94 0 18 0z" fill="#ef4444"/>
-      <path d="M18 2C9.16 2 2 9.16 2 18c0 12.5 16 28 16 28S34 30.5 34 18C34 9.16 26.84 2 18 2z" fill="#dc2626"/>
-      <circle cx="18" cy="18" r="11" fill="white" fill-opacity="0.9"/>
-      <text x="18" y="23" font-family="'Inter','Arial',sans-serif" font-size="12" font-weight="800" fill="#dc2626" text-anchor="middle">B</text>
+      <path d="M18 0C8.06 0 0 8.06 0 18c0 13.5 18 30 18 30s18-16.5 18-30C36 8.06 27.94 0 18 0z" fill="#3b82f6"/>
+      <path d="M18 2C9.16 2 2 9.16 2 18c0 12.5 16 28 16 28S34 30.5 34 18C34 9.16 26.84 2 18 2z" fill="#2563eb"/>
+      <circle cx="18" cy="18" r="8" fill="white" fill-opacity="0.95"/>
+      <circle cx="18" cy="18" r="4" fill="#2563eb"/>
     </svg>
   </div>`,
 });
 
-// Navigation vehicle icon — animated directional arrow (shown during navigation)
+
+// Google Maps-style navigation vehicle — pulsing blue dot with directional cone
+// Uses CSS class so Leaflet marker stays lightweight and animation is CSS-driven
 const createVehicleIcon = (bearing = 0) => L.divIcon({
-  className: '',
-  iconSize: [40, 40],
-  iconAnchor: [20, 20],
-  html: `<div style="
-    width: 40px; height: 40px;
-    position: relative;
-    transform: rotate(${bearing}deg);
-    filter: drop-shadow(0 3px 10px rgba(37,99,235,0.7));
-  ">
-    <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%">
-      <circle cx="20" cy="20" r="19" fill="#2563eb" fill-opacity="0.18"/>
-      <circle cx="20" cy="20" r="13" fill="#2563eb"/>
-      <circle cx="20" cy="20" r="11" fill="#3b82f6"/>
-      <!-- Navigation arrow pointing up -->
-      <polygon points="20,7 27,28 20,23 13,28" fill="white"/>
-    </svg>
-  </div>`,
+  className: 'nav-vehicle-wrapper',
+  iconSize: [56, 56],
+  iconAnchor: [28, 28],
+  html: `
+    <div class="nav-vehicle-ripple"></div>
+    <div class="nav-vehicle-dot" style="transform:rotate(${bearing}deg)">
+      <svg viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:44px;height:44px;display:block">
+        <circle cx="22" cy="22" r="21" fill="#1a73e8" fill-opacity="0.18"/>
+        <circle cx="22" cy="22" r="14" fill="#1a73e8"/>
+        <circle cx="22" cy="22" r="11" fill="#4285f4"/>
+        <!-- Direction arrow -->
+        <polygon points="22,6 30,30 22,24 14,30" fill="white" opacity="0.95"/>
+      </svg>
+    </div>
+  `,
 });
+
 
 // Helper: find the index of the closest route point to a lat/lon
 const findClosestRouteIdx = (routeCoords, lat, lon) => {
@@ -362,25 +363,44 @@ const MapFocusController = ({ focusTarget }) => {
 // Inner map components (must live inside <MapContainer>)
 // ---------------------------------------------------------------------------
 
-/** Centers the map on user's location once on first fix, and on demand via followUser */
-const RecenterOnLocation = ({ coords, followUser, navMode }) => {
+/** Centers the map on user's location once on first fix, and on demand via followUser.
+ *  During navigation, pans to vehiclePos (route-snapped position) so the vehicle arrow
+ *  stays centred on screen — exactly like Google Maps navigation behaviour.
+ *  Also reacts to vehiclePos changes directly so simulation mode works without real GPS.
+ */
+const RecenterOnLocation = ({ coords, followUser, navMode, vehiclePos }) => {
   const map = useMap();
   const didCenter = useRef(false);
 
+  // First GPS fix — fly to user at a nice street zoom
   useEffect(() => {
-    if (!coords) return;
-    if (!didCenter.current) {
-      // First GPS fix → fly to user, zoom in
-      map.flyTo([coords.lat, coords.lon], 13, { animate: true, duration: 1.2 });
-      didCenter.current = true;
-    } else if (navMode && followUser) {
-      // Navigation mode → smooth pan on every update
-      map.panTo([coords.lat, coords.lon], { animate: true, duration: 0.4 });
+    if (!coords || didCenter.current) return;
+    map.flyTo([coords.lat, coords.lon], 14, { animate: true, duration: 1.2 });
+    didCenter.current = true;
+  }, [coords, map]);
+
+  // Navigation follow: re-pan every time the vehicle position changes
+  // This fires on both real GPS ticks AND simulation interval ticks
+  useEffect(() => {
+    if (!navMode || !followUser) return;
+    const pos = vehiclePos ?? (coords ? { lat: coords.lat, lon: coords.lon } : null);
+    if (!pos) return;
+    map.panTo([pos.lat, pos.lon], { animate: true, duration: 0.3, easeLinearity: 0.5 });
+  }, [vehiclePos, navMode, followUser, map]);
+
+  // On navigation START — flyTo the vehicle with a close zoom
+  const prevNavMode = useRef(false);
+  useEffect(() => {
+    if (navMode && !prevNavMode.current) {
+      const pos = vehiclePos ?? (coords ? { lat: coords.lat, lon: coords.lon } : null);
+      if (pos) map.flyTo([pos.lat, pos.lon], 15, { animate: true, duration: 1.0 });
     }
-  }, [coords, followUser, navMode, map]);
+    prevNavMode.current = navMode;
+  }, [navMode, vehiclePos, coords, map]);
 
   return null;
 };
+
 
 /** Calls map.invalidateSize() on window resize — fixes blank map on mobile after orientation change */
 const MapResizer = () => {
@@ -540,6 +560,13 @@ export const RoutePlanner = () => {
   const [vehicleRouteIdx, setVehicleRouteIdx] = useState(0);  // index into navRoute
   const [vehicleBearing,  setVehicleBearing ] = useState(0);  // direction in degrees
   const [routeProgress,   setRouteProgress  ] = useState(0);  // 0–1 fraction completed
+
+  // Panel collapse state (right sidebar)
+  const [panelOpen, setPanelOpen] = useState(true);
+
+  // Simulation ref — advances vehicle when real GPS is unavailable
+  const simIntervalRef = useRef(null);
+  const simIdxRef = useRef(0);
 
   // Phase 3: risk segment overlay + off-route rerouting
   const [riskSegments,  setRiskSegments ] = useState([]);   // [{lat,lon,category}] high-risk points
@@ -761,6 +788,7 @@ export const RoutePlanner = () => {
     if (!navigating || !coords || !navRoute?.length) return;
     const idx = findClosestRouteIdx(navRoute, coords.lat, coords.lon);
     setVehicleRouteIdx(idx);
+    simIdxRef.current = idx;
     // Compute bearing: look ahead a few points for smoother heading
     const lookAhead = Math.min(idx + 3, navRoute.length - 1);
     if (lookAhead > idx) {
@@ -773,6 +801,45 @@ export const RoutePlanner = () => {
     // Progress fraction
     setRouteProgress(navRoute.length > 1 ? idx / (navRoute.length - 1) : 0);
   }, [coords, navigating, navRoute]);
+
+  // ---- Simulation: auto-advance vehicle when GPS is unavailable (demo mode) ----
+  // Mimics Google Maps navigation — moves every 500ms along route coords for smooth animation
+  useEffect(() => {
+    if (!navigating || !navRoute?.length) return;
+    const gpsAvailable = coords && (status === 'ok' || status === 'watching');
+    if (gpsAvailable) return; // real GPS handles it via the effect above
+
+    // Reset to start
+    simIdxRef.current = 0;
+    setVehicleRouteIdx(0);
+    setVehicleBearing(0);
+    setRouteProgress(0);
+
+    simIntervalRef.current = setInterval(() => {
+      const next = simIdxRef.current + 1;
+      if (next >= navRoute.length) {
+        clearInterval(simIntervalRef.current);
+        return;
+      }
+      simIdxRef.current = next;
+      // Update vehicle position
+      setVehicleRouteIdx(next);
+      // Bearing from current to a few points ahead
+      const lookAhead = Math.min(next + 4, navRoute.length - 1);
+      if (lookAhead > next) {
+        setVehicleBearing(computeBearing(
+          navRoute[next][0], navRoute[next][1],
+          navRoute[lookAhead][0], navRoute[lookAhead][1]
+        ));
+      }
+      // Progress 0..1
+      setRouteProgress(next / (navRoute.length - 1));
+    }, 500);
+
+    return () => {
+      if (simIntervalRef.current) clearInterval(simIntervalRef.current);
+    };
+  }, [navigating, navRoute, coords, status]);
 
 
   // ---------------------------------------------------------------------------
@@ -911,6 +978,7 @@ export const RoutePlanner = () => {
   };
 
   const stopNavigation = () => {
+    if (simIntervalRef.current) clearInterval(simIntervalRef.current);
     setNavigating(false);
     setCurrentStep(0);
     setVehicleRouteIdx(0);
@@ -960,12 +1028,31 @@ export const RoutePlanner = () => {
         description="Live GPS tracking · Landslide-aware routing · Turn-by-turn navigation"
       />
 
-      <div className="route-planner-grid">
+      <div className={`route-planner-grid${panelOpen ? '' : ' panel-collapsed'}`}>
 
         {/* ================================================================
             LEFT — Map
         ================================================================ */}
         <div className="card map-card" style={{ padding: 0, overflow: 'hidden', position: 'relative' }}>
+          {/* Panel toggle button — sits on right edge of map */}
+          <button
+            onClick={() => setPanelOpen(o => !o)}
+            title={panelOpen ? 'Collapse panel' : 'Expand panel'}
+            style={{
+              position: 'absolute', top: '50%', right: 0, transform: 'translateY(-50%)',
+              zIndex: 1100, width: 22, height: 52,
+              background: 'var(--white)', border: '1px solid var(--line)',
+              borderRight: 'none', borderRadius: '8px 0 0 8px',
+              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '-2px 0 8px rgba(0,0,0,0.08)',
+              color: 'var(--sky)', fontSize: '0.75rem', fontWeight: 700,
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--sky-tint)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'var(--white)'}
+          >
+            {panelOpen ? '›' : '‹'}
+          </button>
           <MapContainer center={mapCenter} zoom={coords ? 13 : 9} zoomControl={false}
             style={{ height: '100%', width: '100%' }}>
             <TileLayer
@@ -976,8 +1063,17 @@ export const RoutePlanner = () => {
             {/* Mobile: recalculate map size after resize/orientation change */}
             <MapResizer />
 
-            {/* Recenter / follow logic */}
-            <RecenterOnLocation coords={coords} followUser={followUser} navMode={navigating} />
+            {/* Recenter / follow logic — passes vehiclePos so map centers on the moving arrow, not raw GPS */}
+            <RecenterOnLocation
+              coords={coords}
+              followUser={followUser}
+              navMode={navigating}
+              vehiclePos={
+                navigating && navRoute && navRoute[vehicleRouteIdx]
+                  ? { lat: navRoute[vehicleRouteIdx][0], lon: navRoute[vehicleRouteIdx][1] }
+                  : undefined
+              }
+            />
 
             {/* Fit to route after search (non-navigation) */}
             {!navigating && navRoute && <FitToBounds coords={navRoute} />}
@@ -1270,11 +1366,9 @@ export const RoutePlanner = () => {
                   <div style={{ padding: '4px 2px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                       <span style={{
-                        width: 22, height: 22, borderRadius: '50%',
-                        background: '#10b981', color: '#fff',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontWeight: 800, fontSize: '0.78rem', flexShrink: 0,
-                      }}>A</span>
+                        width: 20, height: 20, borderRadius: '50%',
+                        background: '#10b981', flexShrink: 0, display: 'block',
+                      }} />
                       <strong style={{ color: '#059669', fontSize: '0.88rem' }}>Start</strong>
                     </div>
                     <div style={{ fontSize: '0.78rem', color: '#374151' }}>{fromPlace.display_name}</div>
@@ -1283,7 +1377,7 @@ export const RoutePlanner = () => {
               </Marker>
             )}
 
-            {/* ── END marker (Google Maps B-pin, red) ── */}
+            {/* ── END marker (blue destination pin, no label) ── */}
             {toPlace && (
               <Marker position={[toPlace.lat, toPlace.lon]} icon={endIcon} zIndexOffset={1100}>
                 <Popup>
@@ -1291,11 +1385,11 @@ export const RoutePlanner = () => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                       <span style={{
                         width: 22, height: 22, borderRadius: '50%',
-                        background: '#ef4444', color: '#fff',
+                        background: '#2563eb', color: '#fff',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontWeight: 800, fontSize: '0.78rem', flexShrink: 0,
-                      }}>B</span>
-                      <strong style={{ color: '#dc2626', fontSize: '0.88rem' }}>Destination</strong>
+                        fontWeight: 800, fontSize: '1rem', flexShrink: 0,
+                      }}>📍</span>
+                      <strong style={{ color: '#2563eb', fontSize: '0.88rem' }}>Destination</strong>
                     </div>
                     <div style={{ fontSize: '0.78rem', color: '#374151' }}>{toPlace.display_name}</div>
                   </div>
@@ -1411,8 +1505,8 @@ export const RoutePlanner = () => {
                 { color: '#22c55e', label: 'Clear Route / Segment',          line: true },
                 { color: '#94a3b8', label: 'Alternate Route',                line: true, dash: true },
                 { color: '#9ca3af', label: 'Traveled Route (navigation)',     line: true },
-                { icon: '🟢', label: 'Start Point (A)' },
-                { icon: '🔴', label: 'Destination (B)' },
+                { icon: '🟢', label: 'Start Point' },
+                { icon: '🔵', label: 'Destination' },
                 { icon: '🚗', label: 'Vehicle (live position)' },
                 { icon: '🚨', label: 'Reported Incident (Field Officer)' },
               ].map(({ color, label, line, dash, icon }) => (
@@ -1456,7 +1550,10 @@ export const RoutePlanner = () => {
         {/* ================================================================
             RIGHT — Form + Results
         ================================================================ */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto' }}>
+        <div style={{
+          display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto',
+          minWidth: 0, transition: 'opacity 0.25s ease',
+        }}>
 
           {/* ---- Input Card ---- */}
           <div className="card">

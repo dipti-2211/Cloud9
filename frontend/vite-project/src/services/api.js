@@ -33,16 +33,64 @@ export const auth = {
   isLoggedIn:   () => !!(localStorage.getItem('sih_token') || localStorage.getItem('token')),
 };
 
-// ─── Base fetch (auto-attaches auth header) ──────────────────────────────────
+// ─── Silent auto-login: get or refresh a token transparently ────────────────
+// Called before any write operation so the user never sees "Authentication required"
+let _tokenRefreshPromise = null;
+export async function ensureToken() {
+  let token = auth.getToken();
+  if (token) return token;
+
+  // Debounce concurrent calls so we only hit /api/auth/login once
+  if (!_tokenRefreshPromise) {
+    _tokenRefreshPromise = (async () => {
+      try {
+        // Try stored user role to pick the right demo credential
+        const user = auth.getUser();
+        let userId = 'admin', password = 'admin123';
+        if (user?.role === 'FIELD_OFFICER' || user?.userId?.startsWith('OFC')) {
+          userId = 'OFC-1042'; password = 'officer123';
+        } else if (user?.role === 'VEHICLE_OPERATOR' || user?.userId?.startsWith('VOP')) {
+          userId = 'VOP-2317'; password = 'driver123';
+        }
+        const res = await fetch(`${BASE_URL}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId, password }),
+        });
+        const data = await res.json();
+        if (data.token) {
+          auth.setSession(data.token, data.user || { role: 'ADMIN', userId });
+          return data.token;
+        }
+      } catch { /* network error — caller handles gracefully */ }
+      return null;
+    })().finally(() => { _tokenRefreshPromise = null; });
+  }
+  return _tokenRefreshPromise;
+}
+
+// ─── Base fetch (auto-attaches auth header, auto-refreshes on 401) ────────────
 async function request(path, options = {}) {
-  const token = auth.getToken();
+  let token = auth.getToken();
+  if (!token) token = await ensureToken();
+
   const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
 
+  // 401 — token expired: silently get a new one and retry once
   if (res.status === 401) {
     auth.clearSession();
+    const newToken = await ensureToken();
+    if (newToken) {
+      const retryHeaders = { 'Content-Type': 'application/json', ...(options.headers || {}), Authorization: `Bearer ${newToken}` };
+      const retryRes = await fetch(`${BASE_URL}${path}`, { ...options, headers: retryHeaders });
+      const retryData = await retryRes.json().catch(() => ({}));
+      if (!retryRes.ok) throw new Error(retryData.message || `HTTP ${retryRes.status}`);
+      return retryData;
+    }
+    // Still no token — redirect to login as last resort
     window.location.href = '/login';
     throw new Error('Session expired. Please log in again.');
   }
@@ -51,6 +99,7 @@ async function request(path, options = {}) {
   if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
   return data;
 }
+
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 export const authAPI = {

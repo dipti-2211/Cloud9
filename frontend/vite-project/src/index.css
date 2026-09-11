@@ -380,11 +380,74 @@ tr:hover td { background-color: var(--sky-tint); }
   gap: 16px;
   flex: 1;
   min-height: 0;
+  transition: grid-template-columns 0.35s cubic-bezier(0.4,0,0.2,1);
 }
 
+/* Collapsed right panel — map takes full width */
+.route-planner-grid.panel-collapsed {
+  grid-template-columns: 1fr 0;
+}
+.route-planner-grid.panel-collapsed > div:last-child {
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease, width 0.35s cubic-bezier(0.4,0,0.2,1);
+}
+.route-planner-grid > div:last-child {
+  transition: opacity 0.25s ease;
+}
+
+@media (max-width: 900px) {
+  .route-planner-grid { grid-template-columns: 1fr 320px; }
+}
 @media (max-width: 768px) {
-  .route-planner-grid { grid-template-columns: 1fr; grid-template-rows: 55vw auto; }
-  .route-planner-grid .map-card { min-height: 320px; height: 55vw; }
+  .route-planner-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: min(60vw, 400px) auto;
+  }
+  .route-planner-grid.panel-collapsed {
+    grid-template-columns: 1fr;
+  }
+  .route-planner-grid .map-card { min-height: 280px; }
+}
+
+/* ==========================================================================
+   Google Maps–style navigation vehicle marker
+   ========================================================================== */
+.nav-vehicle-wrapper {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Outer ripple ring (accuracy circle effect) */
+.nav-vehicle-ripple {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(26, 115, 232, 0.15);
+  animation: nav-ripple 1.8s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes nav-ripple {
+  0%   { transform: scale(0.6); opacity: 0.9; }
+  70%  { transform: scale(1.4); opacity: 0; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
+
+/* Inner dot with direction arrow */
+.nav-vehicle-dot {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 3px 10px rgba(26,115,232,0.7));
+  transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 .hide-sm { display: inline; }
