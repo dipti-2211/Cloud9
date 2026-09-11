@@ -467,6 +467,14 @@ tr:hover td { background-color: var(--sky-tint); }
   }
   .route-planner-grid.panel-collapsed {
     grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+  }
+  .route-planner-grid.panel-collapsed > div:last-child {
+    display: none;
+  }
+  .route-planner-grid.panel-collapsed .map-card {
+    height: 100% !important;
+    min-height: calc(100vh - 170px);
   }
   .route-planner-grid .map-card { min-height: 280px; }
 }

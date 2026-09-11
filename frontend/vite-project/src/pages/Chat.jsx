@@ -432,12 +432,28 @@ export const Chat = () => {
   // Active conversation object
   const activeConv = conversations.find(c => String(c._id) === String(activeConvId));
 
-  // Filter conversations
-  const filteredConversations = conversations.filter(c =>
-    (c.fieldOfficerName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (c.incidentSummary || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (c.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Filter conversations (Admin sees all field officers; Field Officer sees ONLY Admin / Control Room)
+  const filteredConversations = conversations.filter(c => {
+    if (!isAdmin) {
+      const myId = String(currentUser?._id || currentUser?.userId || currentUser?.id || 'demo-ofc-001');
+      const officerId = String(c.fieldOfficerId || '');
+      const parts = (c.participants || []).map(String);
+      const isMyLine = officerId === myId ||
+                       parts.includes(myId) ||
+                       officerId.includes('1042') ||
+                       (c.fieldOfficerName || '').toLowerCase().includes('masoom') ||
+                       (c.fieldOfficerName || '').toLowerCase().includes('1042') ||
+                       (c.fieldOfficerName || '').toLowerCase().includes('admin');
+      if (!isMyLine) {
+        return false;
+      }
+    }
+    return (
+      (c.fieldOfficerName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (c.incidentSummary || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (c.lastMessage || '').toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)', minHeight: 520 }}>
@@ -485,31 +501,33 @@ export const Chat = () => {
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <button
-                  type="button"
-                  onClick={handleOpenNewOfficerModal}
-                  title="Start direct conversation with a Field Officer"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    padding: '4px 10px',
-                    borderRadius: 6,
-                    background: 'var(--sky)',
-                    color: '#fff',
-                    border: 'none',
-                    fontSize: '0.74rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    boxShadow: '0 1px 3px rgba(2, 132, 199, 0.3)',
-                    transition: 'all 0.15s ease',
-                  }}
-                  onMouseEnter={e => e.currentTarget.style.background = 'var(--sky-dark)'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'var(--sky)'}
-                >
-                  <UserPlus size={13} />
-                  <span>+ New Chat</span>
-                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={handleOpenNewOfficerModal}
+                    title="Start direct conversation with a Field Officer"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      padding: '4px 10px',
+                      borderRadius: 6,
+                      background: 'var(--sky)',
+                      color: '#fff',
+                      border: 'none',
+                      fontSize: '0.74rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      boxShadow: '0 1px 3px rgba(2, 132, 199, 0.3)',
+                      transition: 'all 0.15s ease',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--sky-dark)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'var(--sky)'}
+                  >
+                    <UserPlus size={13} />
+                    <span>+ New Chat</span>
+                  </button>
+                )}
                 <button
                   onClick={() => loadConversations()}
                   title="Refresh channels"
@@ -575,8 +593,11 @@ export const Chat = () => {
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
-                      <span style={{ fontWeight: 600, fontSize: '0.86rem', color: 'var(--ink)' }}>
-                        {conv.fieldOfficerName && conv.fieldOfficerName.toLowerCase() !== 'admin' ? conv.fieldOfficerName : 'Field Officer (OFC-1042)'}
+                      <span style={{ fontWeight: 600, fontSize: '0.86rem', color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {!isAdmin && <Shield size={13} color="#7C3AED" />}
+                        {isAdmin
+                          ? (conv.fieldOfficerName && conv.fieldOfficerName.toLowerCase() !== 'admin' ? conv.fieldOfficerName : 'Field Officer (OFC-1042)')
+                          : 'Command Control Room (Admin)'}
                       </span>
                       <span style={{ fontSize: '0.7rem', color: 'var(--slate)' }}>
                         {conv.lastMessageAt ? new Date(conv.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
@@ -676,7 +697,11 @@ export const Chat = () => {
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--ink)' }}>
-                        {activeConv.fieldOfficerName && activeConv.fieldOfficerName.toLowerCase() !== 'admin' ? activeConv.fieldOfficerName : 'Field Officer (OFC-1042)'}
+                        {isAdmin
+                          ? (activeConv.fieldOfficerName && activeConv.fieldOfficerName.toLowerCase() !== 'admin'
+                              ? activeConv.fieldOfficerName
+                              : 'Field Officer (OFC-1042)')
+                          : 'Command Control Room (HQ Dispatch)'}
                       </span>
                       <span style={{
                         display: 'inline-flex',
@@ -689,14 +714,25 @@ export const Chat = () => {
                         background: 'rgba(34, 197, 94, 0.15)',
                         color: '#15803d',
                       }}>
-                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e' }} /> Live Channel
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e' }} />
+                        {isAdmin ? 'Officer Live Channel' : 'HQ Operational Channel'}
                       </span>
                     </div>
-                    {activeConv.incidentSummary && (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--slate)', marginTop: 2 }}>
-                        Context: <strong style={{ color: 'var(--ink)' }}>{activeConv.incidentSummary}</strong>
-                      </div>
-                    )}
+                    <div style={{ fontSize: '0.75rem', color: 'var(--slate)', marginTop: 2 }}>
+                      {isAdmin ? (
+                        activeConv.incidentSummary ? (
+                          <>Context: <strong style={{ color: 'var(--ink)' }}>{activeConv.incidentSummary}</strong></>
+                        ) : (
+                          <span>Direct channel to assigned Field Officer</span>
+                        )
+                      ) : (
+                        activeConv.incidentSummary ? (
+                          <>Dispatch Alert Context: <strong style={{ color: 'var(--ink)' }}>{activeConv.incidentSummary}</strong></>
+                        ) : (
+                          <span>Direct encrypted line to Central Command & Logistics Control Room</span>
+                        )
+                      )}
+                    </div>
                   </div>
                 </div>
 

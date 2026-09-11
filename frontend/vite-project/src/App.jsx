@@ -72,6 +72,7 @@ function App() {
             <Route path="deliveries"         element={<Deliveries />} />
             <Route path="alerts"             element={<Alerts />} />
             <Route path="route-planner"      element={<RoutePlanner />} />
+            <Route path="planner"            element={<RoutePlanner />} />
             <Route path="districts"          element={<Districts />} />
             <Route path="settings"           element={<Settings />} />
             {/* Personnel — admin creates accounts */}

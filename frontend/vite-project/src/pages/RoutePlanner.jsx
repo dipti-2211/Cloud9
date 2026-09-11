@@ -18,8 +18,10 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
   Navigation, Search, Loader, MapPin, ChevronDown, ChevronUp,
-  ArrowRight, Play, Square, SkipForward, SkipBack, Crosshair, AlertTriangle, ShieldCheck
+  ArrowRight, Play, Square, SkipForward, SkipBack, Crosshair, AlertTriangle, ShieldCheck,
+  Zap, Layers, RotateCcw
 } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { geocodePlace, getRouteRisk, BASE_URL } from '../services/api';
 import toast from 'react-hot-toast';
 import { useUserLocation } from '../hooks/useUserLocation';
@@ -569,6 +571,41 @@ export const RoutePlanner = () => {
   // Panel collapse state (right sidebar)
   const [panelOpen, setPanelOpen] = useState(true);
 
+  const [searchParams] = useSearchParams();
+  const [focusedIncident, setFocusedIncident] = useState(null);
+  const [hudCollapsed, setHudCollapsed] = useState(false);
+
+  // In-route dynamic re-route simulation states
+  const [simulationActive, setSimulationActive] = useState(false);
+  const [simStage, setSimStage] = useState(null); // 'en_route' | 'incident_detected' | 'rerouted' | null
+  const [simBlockedPath, setSimBlockedPath] = useState(null);
+
+  // Handle URL focus query parameters (from Incidents map or direct link)
+  useEffect(() => {
+    const focusLat = searchParams.get('focusLat');
+    const focusLon = searchParams.get('focusLon') || searchParams.get('focusLng');
+    const incidentId = searchParams.get('incidentId');
+    const incidentLoc = searchParams.get('incidentLoc');
+    const incidentType = searchParams.get('incidentType');
+    const zoomVal = parseInt(searchParams.get('zoom') || '16', 10);
+
+    if (focusLat && focusLon) {
+      const lat = parseFloat(focusLat);
+      const lon = parseFloat(focusLon);
+      if (!isNaN(lat) && !isNaN(lon)) {
+        setMapFocus({ lat, lon, zoom: zoomVal, t: Date.now() });
+        setFocusedIncident({
+          lat,
+          lon,
+          id: incidentId || 'INC-FOCUSED',
+          location: incidentLoc ? decodeURIComponent(incidentLoc) : 'Reported Incident Point',
+          type: incidentType ? decodeURIComponent(incidentType) : 'Landslide',
+        });
+        toast.success(`📍 Map focused on reported ${incidentType || 'incident'} at (${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E)`);
+      }
+    }
+  }, [searchParams]);
+
   // Simulation ref — advances vehicle when real GPS is unavailable
   const simIntervalRef = useRef(null);
   const simIdxRef = useRef(0);
@@ -971,6 +1008,8 @@ export const RoutePlanner = () => {
     setRouteProgress(0);
     setFollowUser(true);
     setNavigating(true);
+    setPanelOpen(false); // Auto-collapse panel when navigation starts for responsive view
+    setHudCollapsed(false);
     if (rCoords[0]) {
       setMapFocus({ lat: rCoords[0][0], lon: rCoords[0][1], zoom: 15, t: Date.now() });
     }
@@ -983,6 +1022,218 @@ export const RoutePlanner = () => {
     setVehicleRouteIdx(0);
     setRouteProgress(0);
     setFollowUser(false);
+    setSimulationActive(false);
+    setSimStage(null);
+    setSimBlockedPath(null);
+  };
+
+  // ── In-Route Landslide & Dynamic Re-Route Simulation Handlers ───────────────
+  const handleStartSimReroute = () => {
+    // 1. Set realistic origin and destination
+    const fp = { lat: 25.1651, lon: 93.0173, display_name: 'Haflong Sector 4, Dima Hasao' };
+    const tp = { lat: 24.8220, lon: 92.7978, display_name: 'Silchar Valley Logistics Hub, Cachar' };
+    setFromPlace(fp);
+    setToPlace(tp);
+
+    // Initial planned corridor via SH-5
+    const initialCorridor = [
+      [25.1651, 93.0173], // Haflong start
+      [25.1580, 93.0150],
+      [25.1500, 93.0125],
+      [25.1450, 93.0100], // km 5.8
+      [25.1380, 93.0075], // Current vehicle position before slide
+      [25.1320, 93.0055],
+      [25.1280, 93.0040], // Point of future landslide obstruction!
+      [25.1200, 93.0020],
+      [25.1100, 92.9988], // Retzol
+      [25.0400, 92.9400],
+      [24.9600, 92.8900],
+      [24.9000, 92.8400],
+      [24.8500, 92.8100],
+      [24.8220, 92.7978], // Silchar
+    ];
+
+    const initialSteps = [
+      {
+        icon: '▶',
+        instruction: 'Depart Haflong Sector 4 heading south on SH-5 corridor',
+        distanceM: 4200,
+        durationS: 360,
+        maneuver: { type: 'depart', modifier: '' },
+        location: { lat: 25.1651, lon: 93.0173 },
+      },
+      {
+        icon: '↑',
+        instruction: 'Continue south on SH-5 toward Retzol Junction (km 8.4)',
+        distanceM: 7800,
+        durationS: 620,
+        maneuver: { type: 'continue', modifier: '' },
+        location: { lat: 25.1450, lon: 93.0100 },
+      },
+      {
+        icon: '→',
+        instruction: 'Follow south-west arterial toward Silchar Valley',
+        distanceM: 34000,
+        durationS: 2500,
+        maneuver: { type: 'turn-right', modifier: 'right' },
+        location: { lat: 25.0400, lon: 92.9400 },
+      },
+      {
+        icon: '🏁',
+        instruction: 'Arrive at Silchar Valley Logistics Hub',
+        distanceM: 0,
+        durationS: 0,
+        maneuver: { type: 'arrive', modifier: '' },
+        location: { lat: 24.8220, lon: 92.7978 },
+      },
+    ];
+
+    setRoutes([
+      {
+        coords: initialCorridor,
+        steps: initialSteps,
+        distKm: '46.0',
+        mins: 58,
+        score: 42,
+        worstCategory: 'Medium',
+      }
+    ]);
+    setSelectedIdx(0);
+    setNavRoute(initialCorridor);
+    setNavSteps(initialSteps);
+    setCurrentStep(1);
+    // Vehicle is actively navigating at index 4 (km 8.4)
+    setVehicleRouteIdx(4);
+    setVehicleBearing(195);
+    setRouteProgress(0.32);
+    setFollowUser(true);
+    setNavigating(true);
+    setPanelOpen(false); // Collapsed for full map view
+    setHudCollapsed(false);
+    setSimulationActive(true);
+    setSimStage('en_route');
+    setSimBlockedPath(null);
+
+    setMapFocus({ lat: 25.1380, lon: 93.0075, zoom: 14, t: Date.now() });
+
+    toast('🚗 Simulation Active: Vehicle en route on SH-5 (km 8.4) toward Silchar', {
+      icon: '🛣️',
+      duration: 5000,
+    });
+  };
+
+  const handleTriggerSimIncident = () => {
+    // 2. Incident happens right on the active path ahead of vehicle!
+    setSimStage('incident_detected');
+
+    const blockedSegmentCoords = [
+      [25.1380, 93.0075],
+      [25.1320, 93.0055],
+      [25.1280, 93.0040], // Landslide point
+      [25.1200, 93.0020],
+      [25.1100, 92.9988],
+    ];
+    setSimBlockedPath(blockedSegmentCoords);
+
+    // Injected incident at exact blockage point
+    const newInc = {
+      id: 'sim-incident-sh5',
+      lat: 25.1280,
+      lon: 93.0040,
+      type: 'Landslide',
+      severity: 'critical',
+      road: 'SH-5',
+      desc: 'CRITICAL HAZARD: Active slope collapse & 120m debris on SH-5! Both lanes blocked completely. Rerouting active traffic.',
+      is_new: true,
+      is_blocked: true,
+    };
+    setLiveIncidents(prev => [newInc, ...prev.filter(i => i.id !== 'sim-incident-sh5')]);
+
+    // Turn SH-5 segment high-risk and blocked in liveSegments
+    setLiveSegments(prev => prev.map(s => {
+      if (s.road_name === 'SH-5' || s.id.includes('SH-5')) {
+        return { ...s, risk_level: 'high', is_new: true, has_new_incident: true, is_blocked: true };
+      }
+      return s;
+    }));
+
+    toast.error('🚨 CRITICAL INCIDENT REPORTED AHEAD: Massive Landslide at km 12.8 on SH-5! Road is BLOCKED!', {
+      duration: 6000,
+    });
+
+    // 3. Trigger dynamic recalculation & re-route
+    setTimeout(() => {
+      // Safe detour bypass corridor via NH-27
+      const detourCorridor = [
+        [25.1380, 93.0075], // Vehicle divergence point
+        [25.1480, 93.0250], // Divert north-east around slide
+        [25.1600, 93.0550], // Join stable NH-27 corridor
+        [25.1550, 93.0900],
+        [25.1300, 93.1150],
+        [25.0700, 93.1100],
+        [24.9800, 93.0600],
+        [24.9000, 92.9600],
+        [24.8500, 92.8600],
+        [24.8220, 92.7978], // Safely arrives in Silchar
+      ];
+
+      const detourSteps = [
+        {
+          icon: '↩',
+          instruction: '⚠️ EMERGENCY DETOUR: Turn left in 150m onto NH-27 East Bypass to avoid Landslide blockage',
+          distanceM: 150,
+          durationS: 25,
+          maneuver: { type: 'turn-left', modifier: 'left' },
+          location: { lat: 25.1380, lon: 93.0075 },
+        },
+        {
+          icon: '↑',
+          instruction: 'Follow NH-27 East Safe Corridor (Verified Slope 8° · Low Risk · 0 Landslide Hotspots)',
+          distanceM: 38200,
+          durationS: 2600,
+          maneuver: { type: 'continue', modifier: '' },
+          location: { lat: 25.1600, lon: 93.0550 },
+        },
+        {
+          icon: '→',
+          instruction: 'Turn right onto Silchar East Arterial approach road',
+          distanceM: 7800,
+          durationS: 580,
+          maneuver: { type: 'turn-right', modifier: 'right' },
+          location: { lat: 24.9000, lon: 92.9600 },
+        },
+        {
+          icon: '🏁',
+          instruction: 'Arrive safely at Silchar Valley Logistics Hub (Hazard bypassed)',
+          distanceM: 0,
+          durationS: 0,
+          maneuver: { type: 'arrive', modifier: '' },
+          location: { lat: 24.8220, lon: 92.7978 },
+        },
+      ];
+
+      setNavRoute(detourCorridor);
+      setNavSteps(detourSteps);
+      setCurrentStep(0);
+      setVehicleRouteIdx(0);
+      setVehicleBearing(70); // Heading toward north-east bypass
+      setRouteProgress(0.05);
+      setSimStage('rerouted');
+
+      setMapFocus({ lat: 25.1480, lon: 93.0250, zoom: 14, t: Date.now() });
+
+      toast.success('✅ Dynamic Re-route Applied: Diverted via NH-27 Safe Bypass (+5.4 km, +8 min) — 100% Hazard Avoided!', {
+        duration: 8000,
+      });
+    }, 1400);
+  };
+
+  const handleResetSim = () => {
+    setSimulationActive(false);
+    setSimStage(null);
+    setSimBlockedPath(null);
+    stopNavigation();
+    toast('Simulation reset to normal mode', { icon: '🔄' });
   };
 
   const selectRoute = (idx) => {
@@ -1395,121 +1646,501 @@ export const RoutePlanner = () => {
                 </Popup>
               </Marker>
             )}
+
+            {/* ── Focused Incident Marker from Platform GIS Navigation ── */}
+            {focusedIncident && (
+              <Marker
+                position={[focusedIncident.lat, focusedIncident.lon]}
+                icon={L.divIcon({
+                  className: '',
+                  iconSize: [38, 38],
+                  iconAnchor: [19, 19],
+                  html: `<div style="
+                    width: 38px; height: 38px; border-radius: 50%;
+                    background: #0284c7; color: #fff;
+                    display: flex; align-items: center; justify-content: center;
+                    font-size: 18px; border: 3px solid #ffffff;
+                    box-shadow: 0 0 18px rgba(2,132,199,0.9);
+                    animation: pulse-danger 1.5s infinite;
+                  ">📍</div>`,
+                })}
+                zIndexOffset={1500}
+              >
+                <Popup minWidth={240} autoClose={false}>
+                  <div style={{ padding: '6px 2px' }}>
+                    <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '2px 8px', borderRadius: 4, fontWeight: 800, fontSize: '0.72rem', marginBottom: 4 }}>
+                      📍 PLATFORM GIS FOCUSED INCIDENT
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: '0.88rem', marginBottom: 3 }}>
+                      {focusedIncident.location}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                      Exact Point: {focusedIncident.lat.toFixed(5)}° N, {focusedIncident.lon.toFixed(5)}° E
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: '#dc2626', fontWeight: 700, marginTop: 4 }}>
+                      Hazard Type: {focusedIncident.type}
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            )}
+
+            {/* ── Blocked Road Section & Hazard Pin in Simulation ── */}
+            {simBlockedPath && (
+              <>
+                <Polyline
+                  positions={simBlockedPath}
+                  pathOptions={{
+                    color: '#dc2626',
+                    weight: 9,
+                    opacity: 0.95,
+                    dashArray: '8 8',
+                    lineCap: 'round',
+                    lineJoin: 'round',
+                  }}
+                />
+                <Marker
+                  position={[25.1280, 93.0040]}
+                  icon={L.divIcon({
+                    className: '',
+                    iconSize: [36, 36],
+                    iconAnchor: [18, 18],
+                    html: `<div style="
+                      width: 36px; height: 36px; border-radius: 50%;
+                      background: #dc2626; color: #fff;
+                      display: flex; align-items: center; justify-content: center;
+                      font-size: 18px; border: 3px solid #ffffff;
+                      box-shadow: 0 0 16px rgba(220,38,38,0.9);
+                      animation: pulse-danger 1.2s infinite;
+                    ">⛔</div>`,
+                  })}
+                  zIndexOffset={1400}
+                >
+                  <Popup minWidth={250}>
+                    <div style={{ padding: '6px 2px' }}>
+                      <div style={{ background: '#fee2e2', color: '#dc2626', padding: '3px 8px', borderRadius: 4, fontWeight: 800, fontSize: '0.75rem', marginBottom: 4 }}>
+                        ⛔ ACTIVE INCIDENT ON ROUTE — ROAD BLOCKED
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: '0.88rem', marginBottom: 4 }}>
+                        SH-5 Spur (km 12.8), Dima Hasao
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#444', marginBottom: 6 }}>
+                        Severe landslide with boulder collapse. Path impassable for logistics vehicles.
+                      </div>
+                      <div style={{ background: '#ecfdf5', color: '#047857', padding: '3px 8px', borderRadius: 4, fontWeight: 700, fontSize: '0.72rem' }}>
+                        ✓ System has auto-rerouted vehicle via NH-27 safe bypass corridor
+                      </div>
+                    </div>
+                  </Popup>
+                </Marker>
+              </>
+            )}
           </MapContainer>
 
-          {/* ---- Navigation HUD overlay ---- */}
+          {/* ---- Navigation HUD overlay (Dropdown / Collapsible & Responsive) ---- */}
           {navigating && currentNavStep && (
-            <div style={{
-              position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000,
-              background: 'var(--white)',
-              borderBottom: '2px solid var(--sky)',
-              padding: '14px 16px 12px',
-              boxShadow: '0 4px 16px rgba(44,143,209,0.14)',
-            }}>
-              {/* Current step */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            hudCollapsed ? (
+              /* Collapsed Floating Pill HUD — responsive on all screens */
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 14,
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  zIndex: 1000,
+                  background: 'rgba(255, 255, 255, 0.95)',
+                  backdropFilter: 'blur(10px)',
+                  borderRadius: 30,
+                  border: '1.5px solid var(--sky)',
+                  boxShadow: '0 8px 24px rgba(2, 132, 199, 0.22)',
+                  padding: '8px 14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  maxWidth: 'min(94vw, 560px)',
+                  width: 'auto',
+                  animation: 'fadeIn 0.2s ease',
+                }}
+              >
                 <div style={{
-                  width: 48, height: 48, borderRadius: '50%', flexShrink: 0,
-                  background: 'var(--accent)', display: 'flex', alignItems: 'center',
-                  justifyContent: 'center', fontSize: '1.4rem', boxShadow: '0 0 0 4px rgba(59,130,246,0.2)',
+                  width: 32, height: 32, borderRadius: '50%',
+                  background: 'var(--accent)', color: '#fff',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: '1.1rem', flexShrink: 0,
                 }}>
                   {currentNavStep.icon}
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '1.15rem', fontWeight: 700, lineHeight: 1.2, color: 'var(--ink)' }}>
+                <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                  <div style={{
+                    fontSize: '0.85rem', fontWeight: 700, color: 'var(--ink)',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>
                     {currentNavStep.instruction}
                   </div>
-                  {currentNavStep.distanceM > 0 && (
-                    <div style={{ fontSize: '0.85rem', color: 'var(--sky)', marginTop: 2 }}>
-                      in {formatDist(currentNavStep.distanceM)}
-                    </div>
-                  )}
+                  <div style={{ fontSize: '0.72rem', color: 'var(--slate)', display: 'flex', gap: 6, alignItems: 'center' }}>
+                    {currentNavStep.distanceM > 0 && (
+                      <span style={{ color: 'var(--sky)', fontWeight: 600 }}>in {formatDist(currentNavStep.distanceM)}</span>
+                    )}
+                    <span>•</span>
+                    <span>Remaining: {formatDist(remainingDist)} ({formatTime(remainingTime)})</span>
+                  </div>
                 </div>
-                <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--slate)' }}>Remaining</div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--ink)' }}>{formatDist(remainingDist)}</div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--slate)' }}>{formatTime(remainingTime)}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+                  <button
+                    onClick={handlePrevStep}
+                    disabled={currentStep <= 0}
+                    title="Previous Step"
+                    style={{
+                      background: '#f1f5f9', border: '1px solid var(--line)', borderRadius: 6,
+                      padding: '4px 6px', cursor: currentStep <= 0 ? 'not-allowed' : 'pointer',
+                      opacity: currentStep <= 0 ? 0.4 : 1, display: 'flex',
+                    }}
+                  >
+                    <SkipBack size={12} />
+                  </button>
+                  <button
+                    onClick={handleNextStep}
+                    disabled={currentStep >= navSteps.length - 1}
+                    title="Next Step"
+                    style={{
+                      background: '#f1f5f9', border: '1px solid var(--line)', borderRadius: 6,
+                      padding: '4px 6px', cursor: currentStep >= navSteps.length - 1 ? 'not-allowed' : 'pointer',
+                      opacity: currentStep >= navSteps.length - 1 ? 0.4 : 1, display: 'flex',
+                    }}
+                  >
+                    <SkipForward size={12} />
+                  </button>
+                  <button
+                    onClick={() => setHudCollapsed(false)}
+                    title="Expand Full Navigation HUD"
+                    style={{
+                      background: 'var(--sky-tint)', border: '1px solid var(--sky)', color: 'var(--sky-dark)',
+                      borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: '0.73rem', fontWeight: 700,
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                    }}
+                  >
+                    <ChevronDown size={14} /> Expand HUD
+                  </button>
+                  <button
+                    onClick={stopNavigation}
+                    title="End Navigation"
+                    style={{
+                      background: '#fee2e2', border: '1px solid #fca5a5', color: '#dc2626',
+                      borderRadius: 6, padding: '4px 8px', cursor: 'pointer', fontSize: '0.73rem', fontWeight: 700,
+                      display: 'inline-flex', alignItems: 'center', gap: 3,
+                    }}
+                  >
+                    <Square size={11} /> End
+                  </button>
                 </div>
               </div>
+            ) : (
+              /* Expanded Full HUD with Collapse Button */
+              <div style={{
+                position: 'absolute', top: 0, left: 0, right: 0, zIndex: 1000,
+                background: 'var(--white)',
+                borderBottom: '2px solid var(--sky)',
+                padding: '14px 16px 12px',
+                boxShadow: '0 4px 16px rgba(44,143,209,0.14)',
+              }}>
+                {/* Header with Minimize Toggle */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', fontWeight: 700, color: 'var(--sky-dark)' }}>
+                    <Navigation size={14} color="var(--sky)" /> Live Turn-by-Turn Guidance
+                  </div>
+                  <button
+                    onClick={() => setHudCollapsed(true)}
+                    title="Minimize HUD to floating pill"
+                    style={{
+                      background: 'var(--sky-tint)',
+                      border: '1px solid var(--sky-tint-2)',
+                      color: 'var(--sky-dark)',
+                      borderRadius: 6,
+                      padding: '3px 8px',
+                      cursor: 'pointer',
+                      fontSize: '0.73rem',
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <ChevronUp size={13} /> Minimize HUD
+                  </button>
+                </div>
 
-              {/* Next step preview */}
-              {nextNavStep && (
-                <div style={{
-                  marginTop: '8px', padding: '6px 10px',
-                  background: 'var(--sky-tint)', borderRadius: '6px',
-                  display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem',
-                  color: 'var(--slate)',
-                }}>
-                  <span style={{ fontSize: '1rem' }}>{nextNavStep.icon}</span>
-                  <span>Then: {nextNavStep.instruction}</span>
-                  {nextNavStep.distanceM > 0 && (
-                    <span style={{ marginLeft: 'auto', flexShrink: 0 }}>
-                      {formatDist(nextNavStep.distanceM)}
+                {/* Current step */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{
+                    width: 48, height: 48, borderRadius: '50%', flexShrink: 0,
+                    background: 'var(--accent)', display: 'flex', alignItems: 'center',
+                    justifyContent: 'center', fontSize: '1.4rem', boxShadow: '0 0 0 4px rgba(59,130,246,0.2)',
+                  }}>
+                    {currentNavStep.icon}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '1.15rem', fontWeight: 700, lineHeight: 1.2, color: 'var(--ink)' }}>
+                      {currentNavStep.instruction}
+                    </div>
+                    {currentNavStep.distanceM > 0 && (
+                      <div style={{ fontSize: '0.85rem', color: 'var(--sky)', marginTop: 2 }}>
+                        in {formatDist(currentNavStep.distanceM)}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--slate)' }}>Remaining</div>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--ink)' }}>{formatDist(remainingDist)}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--slate)' }}>{formatTime(remainingTime)}</div>
+                  </div>
+                </div>
+
+                {/* Next step preview */}
+                {nextNavStep && (
+                  <div style={{
+                    marginTop: '8px', padding: '6px 10px',
+                    background: 'var(--sky-tint)', borderRadius: '6px',
+                    display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem',
+                    color: 'var(--slate)',
+                  }}>
+                    <span style={{ fontSize: '1rem' }}>{nextNavStep.icon}</span>
+                    <span>Then: {nextNavStep.instruction}</span>
+                    {nextNavStep.distanceM > 0 && (
+                      <span style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                        {formatDist(nextNavStep.distanceM)}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Progress bar */}
+                <div style={{ margin: '10px 0 4px', background: 'var(--line)', borderRadius: 4, height: 5, overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${Math.round(routeProgress * 100)}%`,
+                    background: 'linear-gradient(90deg, #10b981, #2563eb)',
+                    borderRadius: 4,
+                    transition: 'width 0.6s ease',
+                    minWidth: routeProgress > 0 ? 8 : 0,
+                  }} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--slate)', marginBottom: 4 }}>
+                  <span>🟢 Start</span>
+                  <span style={{ fontWeight: 600, color: 'var(--sky)' }}>{Math.round(routeProgress * 100)}% completed</span>
+                  <span>🔴 Destination</span>
+                </div>
+
+                {/* HUD controls */}
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handlePrevStep}
+                      disabled={currentStep <= 0}
+                      style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', opacity: currentStep <= 0 ? 0.5 : 1, cursor: currentStep <= 0 ? 'not-allowed' : 'pointer' }}
+                      title="Previous Step"
+                    >
+                      <SkipBack size={12} /> Prev Step
+                    </button>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--ink)' }}>
+                      Step {currentStep + 1} of {Math.max(navSteps.length, 1)}
                     </span>
-                  )}
+                    <button
+                      className="btn btn-secondary"
+                      onClick={handleNextStep}
+                      disabled={currentStep >= navSteps.length - 1}
+                      style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', opacity: currentStep >= navSteps.length - 1 ? 0.5 : 1, cursor: currentStep >= navSteps.length - 1 ? 'not-allowed' : 'pointer' }}
+                      title="Next Step"
+                    >
+                      <SkipForward size={12} /> Next Step
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <button
+                      onClick={() => setFollowUser(f => !f)}
+                      className={followUser ? 'btn btn-primary' : 'btn btn-secondary'}
+                      style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      <Crosshair size={12} /> {followUser ? 'Following' : 'Follow me'}
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      onClick={stopNavigation}
+                      style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--danger)' }}
+                    >
+                      <Square size={12} /> End
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          )}
+
+          {/* ── Floating Live Simulation Controller on Map ── */}
+          {simulationActive && (
+            <div style={{
+              position: 'absolute',
+              bottom: 20,
+              left: 16,
+              zIndex: 1050,
+              background: 'rgba(15, 23, 42, 0.94)',
+              backdropFilter: 'blur(10px)',
+              border: simStage === 'incident_detected' ? '2px solid #ef4444' : simStage === 'rerouted' ? '2px solid #22c55e' : '1px solid rgba(255,255,255,0.25)',
+              borderRadius: 12,
+              padding: '12px 16px',
+              maxWidth: 460,
+              boxShadow: '0 8px 30px rgba(0,0,0,0.4)',
+              color: '#fff',
+              animation: 'fadeIn 0.25s ease',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{
+                    display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                    background: simStage === 'incident_detected' ? '#ef4444' : simStage === 'rerouted' ? '#22c55e' : '#38bdf8',
+                    boxShadow: `0 0 8px ${simStage === 'incident_detected' ? '#ef4444' : simStage === 'rerouted' ? '#22c55e' : '#38bdf8'}`
+                  }} />
+                  <span style={{ fontSize: '0.8rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    {simStage === 'incident_detected' ? '🚨 IN-ROUTE HAZARD TRIGGERED' : simStage === 'rerouted' ? '✅ DYNAMIC DETOUR ACTIVE' : '🚗 LIVE EN-ROUTE SIMULATION'}
+                  </span>
+                </div>
+                <button
+                  onClick={handleResetSim}
+                  title="Reset Demo"
+                  style={{
+                    background: 'none', border: 'none', color: '#94a3b8',
+                    cursor: 'pointer', fontSize: '0.8rem', padding: '0 4px',
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {simStage === 'en_route' && (
+                <div>
+                  <p style={{ margin: '0 0 10px', fontSize: '0.76rem', color: '#cbd5e1', lineHeight: 1.4 }}>
+                    Vehicle is navigating on <strong>SH-5</strong> toward Silchar. Click below to simulate a sudden critical landslide blockage on the active path ahead:
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleTriggerSimIncident}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: 7,
+                      background: 'linear-gradient(135deg, #dc2626, #b91c1c)',
+                      color: '#fff',
+                      border: 'none',
+                      fontWeight: 800,
+                      fontSize: '0.78rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      boxShadow: '0 2px 8px rgba(220,38,38,0.4)',
+                    }}
+                  >
+                    <AlertTriangle size={14} /> 🚨 Trigger Landslide Blockage on Path
+                  </button>
                 </div>
               )}
 
-              {/* Progress bar */}
-              <div style={{ margin: '10px 0 4px', background: 'var(--line)', borderRadius: 4, height: 5, overflow: 'hidden' }}>
-                <div style={{
-                  height: '100%',
-                  width: `${Math.round(routeProgress * 100)}%`,
-                  background: 'linear-gradient(90deg, #10b981, #2563eb)',
-                  borderRadius: 4,
-                  transition: 'width 0.6s ease',
-                  minWidth: routeProgress > 0 ? 8 : 0,
-                }} />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--slate)', marginBottom: 4 }}>
-                <span>🟢 Start</span>
-                <span style={{ fontWeight: 600, color: 'var(--sky)' }}>{Math.round(routeProgress * 100)}% completed</span>
-                <span>🔴 Destination</span>
-              </div>
+              {simStage === 'incident_detected' && (
+                <div>
+                  <p style={{ margin: '0 0 6px', fontSize: '0.76rem', color: '#fca5a5', fontWeight: 600 }}>
+                    ⚠️ SH-5 blocked at km 12.8! Neural engine rerouting traffic in real-time...
+                  </p>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', color: '#fecaca' }}>
+                    <Loader size={12} className="spin" /> Calculating safest alternate bypass corridor...
+                  </div>
+                </div>
+              )}
 
-              {/* HUD controls */}
-              <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={handlePrevStep}
-                    disabled={currentStep <= 0}
-                    style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', opacity: currentStep <= 0 ? 0.5 : 1, cursor: currentStep <= 0 ? 'not-allowed' : 'pointer' }}
-                    title="Previous Step"
-                  >
-                    <SkipBack size={12} /> Prev Step
-                  </button>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--ink)' }}>
-                    Step {currentStep + 1} of {Math.max(navSteps.length, 1)}
-                  </span>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={handleNextStep}
-                    disabled={currentStep >= navSteps.length - 1}
-                    style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', opacity: currentStep >= navSteps.length - 1 ? 0.5 : 1, cursor: currentStep >= navSteps.length - 1 ? 'not-allowed' : 'pointer' }}
-                    title="Next Step"
-                  >
-                    <SkipForward size={12} /> Next Step
-                  </button>
+              {simStage === 'rerouted' && (
+                <div>
+                  <div style={{
+                    padding: '8px 10px', borderRadius: 8, background: 'rgba(34, 197, 94, 0.15)',
+                    border: '1px solid rgba(34, 197, 94, 0.4)', marginBottom: 10,
+                  }}>
+                    <div style={{ fontSize: '0.76rem', fontWeight: 800, color: '#4ade80', marginBottom: 3 }}>
+                      ✓ Optimal Safe Detour Applied
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: '#bbf7d0', lineHeight: 1.35 }}>
+                      Bypassed blocked SH-5 sector. Diverted via <strong>NH-27 East Bypass</strong> (0 landslide hotspots · +5.4 km, +8 min).
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={handleNextStep}
+                      disabled={currentStep >= navSteps.length - 1}
+                      style={{
+                        flex: 1, padding: '6px 10px', borderRadius: 6, background: '#0284c7',
+                        color: '#fff', border: 'none', fontSize: '0.74rem', fontWeight: 700,
+                        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                      }}
+                    >
+                      <SkipForward size={12} /> Next Turn
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleStartSimReroute}
+                      style={{
+                        padding: '6px 10px', borderRadius: 6, background: 'rgba(255,255,255,0.12)',
+                        color: '#fff', border: '1px solid rgba(255,255,255,0.2)', fontSize: '0.74rem',
+                        fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                      }}
+                    >
+                      <RotateCcw size={12} /> Restart Demo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetSim}
+                      style={{
+                        padding: '6px 10px', borderRadius: 6, background: '#ef4444',
+                        color: '#fff', border: 'none', fontSize: '0.74rem', fontWeight: 700, cursor: 'pointer',
+                      }}
+                    >
+                      Stop
+                    </button>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  <button
-                    onClick={() => setFollowUser(f => !f)}
-                    className={followUser ? 'btn btn-primary' : 'btn btn-secondary'}
-                    style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
-                  >
-                    <Crosshair size={12} /> {followUser ? 'Following' : 'Follow me'}
-                  </button>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={stopNavigation}
-                    style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--danger)' }}
-                  >
-                    <Square size={12} /> End
-                  </button>
-                </div>
-              </div>
+              )}
             </div>
+          )}
+
+          {/* ── Floating Route Panel toggle button for seamless navigation view ── */}
+          {navigating && (
+            <button
+              type="button"
+              onClick={() => setPanelOpen(p => !p)}
+              style={{
+                position: 'absolute',
+                bottom: 16,
+                right: 16,
+                zIndex: 1000,
+                background: 'rgba(15, 23, 42, 0.88)',
+                backdropFilter: 'blur(8px)',
+                color: '#ffffff',
+                border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: 8,
+                padding: '7px 12px',
+                fontSize: '0.76rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <Layers size={13} />
+              {panelOpen ? 'Hide Route Panel ▾' : 'Route Details & Steps ▴'}
+            </button>
           )}
 
           {/* Map legend (collapsed during navigation) */}
@@ -1627,6 +2258,45 @@ export const RoutePlanner = () => {
               {routeLoading ? <Loader size={15} className="spin" /> : <Search size={15} />}
               {routeLoading ? 'Scoring routes…' : 'Find Routes'}
             </button>
+
+            {/* Simulation Demo Trigger Card */}
+            <div style={{
+              marginTop: 14,
+              padding: '10px 12px',
+              background: 'linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%)',
+              border: '1.5px solid #86efac',
+              borderRadius: 8,
+            }}>
+              <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#166534', marginBottom: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Zap size={13} color="#16a34a" /> Demo: In-Route Landslide & Re-route
+              </div>
+              <p style={{ margin: '0 0 8px', fontSize: '0.72rem', color: '#15803d', lineHeight: 1.35 }}>
+                Simulate an active route (Haflong → Silchar) encountering a sudden landslide blockage and auto-calculating a safe detour.
+              </p>
+              <button
+                type="button"
+                onClick={handleStartSimReroute}
+                style={{
+                  width: '100%',
+                  padding: '7px 12px',
+                  background: 'linear-gradient(135deg, #16a34a, #15803d)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  boxShadow: '0 2px 6px rgba(22, 163, 74, 0.25)',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <Zap size={13} /> Launch In-Route Incident Simulation
+              </button>
+            </div>
           </div>
 
           {/* ---- Route cards ---- */}

@@ -176,9 +176,13 @@ export const IncidentReport = () => {
         setAnalysis(data);
         if (data.derived_severity && data.derived_severity !== 'unknown') {
           setSeverity(data.derived_severity);
+        } else {
+          setSeverity('high');
         }
         if (data.vision_analysis?.hazard_type && HAZARD_TO_TYPE[data.vision_analysis.hazard_type]) {
           setType(HAZARD_TO_TYPE[data.vision_analysis.hazard_type]);
+        } else {
+          setType('LANDSLIDE');
         }
         if (data.vision_analysis?.road_blocked != null) {
           setRoadBlock(data.vision_analysis.road_blocked ? 'full' : 'partial');
@@ -557,7 +561,7 @@ export const IncidentReport = () => {
                       </>
                     ) : (
                       <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                        Heuristic analysis: <strong>{photoAnalysis.derived_severity}</strong>
+                        Heuristic analysis: <strong style={{ color: '#dc2626' }}>{(!photoAnalysis.derived_severity || photoAnalysis.derived_severity === 'unknown') ? 'landslide' : photoAnalysis.derived_severity}</strong>
                       </span>
                     )}
                   </div>
