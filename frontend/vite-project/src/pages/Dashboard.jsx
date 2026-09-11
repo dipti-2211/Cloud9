@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardKPIs, vehicles, roads, incidents } from '../data/mockData';
-import { api, alertsAPI } from '../services/api';
+import { api, alertsAPI, deliveriesAPI } from '../services/api';
 import { Badge } from '../components/common/Badge';
 import { MapPanel } from '../components/map/MapPanel';
 import { useUserLocation } from '../hooks/useUserLocation';
@@ -336,6 +336,7 @@ const LocationBanner = ({ status, risk, requestLocation, setManualCoords }) => {
 export const Dashboard = () => {
   const { coords, risk, status, requestLocation, setManualCoords } = useUserLocation();
   const [liveAlerts, setLiveAlerts] = useState([]);
+  const [liveDeliveries, setLiveDeliveries] = useState([]);
 
   // Trigger location request on mount
   useEffect(() => { requestLocation(); }, []);
@@ -349,10 +350,27 @@ export const Dashboard = () => {
     return () => clearInterval(id);
   }, []);
 
-  // Fix #5 — Build KPI strip with real alert count substituted in
+  // Load live deliveries (60s polling)
+  useEffect(() => {
+    deliveriesAPI.getAll().then(setLiveDeliveries).catch(() => {});
+    const id = setInterval(() => {
+      deliveriesAPI.getAll().then(setLiveDeliveries).catch(() => {});
+    }, 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Build KPI strip with real alert and delivery counts
   const kpiList = dashboardKPIs.map(kpi => {
     if (kpi.icon === 'bell') {
       return { ...kpi, value: String(liveAlerts.length), label: 'Risk Alerts (Real-time)' };
+    }
+    if (kpi.icon === 'truck' || kpi.label?.toLowerCase().includes('deliver') || kpi.label?.toLowerCase().includes('vehicle')) {
+      return {
+        ...kpi,
+        label: 'Active Deliveries',
+        value: String(liveDeliveries.length || 0),
+        change: liveDeliveries.length > 0 ? `${liveDeliveries.filter(d => d.status === 'IN TRANSIT' || d.status === 'ACTIVE').length} In Transit` : kpi.change,
+      };
     }
     return kpi;
   });
@@ -375,13 +393,22 @@ export const Dashboard = () => {
   const STATUS_COLOR         = { 'IN TRANSIT': 'var(--success)', DELAYED: 'var(--warning)', 'RE-ROUTING': 'var(--danger)' };
 
   const kpiPopovers = {
+    'Active Deliveries': {
+      href: '/deliveries',
+      items: (liveDeliveries.length > 0 ? liveDeliveries : vehicles).map(d => ({
+        primary: d.id || d.deliveryId || d.vehicle,
+        secondary: `${d.cargo || 'Cargo'} → ${d.destination || 'Destination'}`,
+        badge: d.status || 'IN TRANSIT',
+        badgeColor: STATUS_COLOR[d.status] || 'var(--success)',
+      })),
+    },
     'Active Vehicles': {
-      href: '/vehicles',
-      items: vehicles.map(v => ({
-        primary: v.id,
-        secondary: `${v.cargo} → ${v.destination}`,
-        badge: v.status,
-        badgeColor: STATUS_COLOR[v.status],
+      href: '/deliveries',
+      items: (liveDeliveries.length > 0 ? liveDeliveries : vehicles).map(d => ({
+        primary: d.id || d.deliveryId || d.vehicle,
+        secondary: `${d.cargo || 'Cargo'} → ${d.destination || 'Destination'}`,
+        badge: d.status || 'IN TRANSIT',
+        badgeColor: STATUS_COLOR[d.status] || 'var(--success)',
       })),
     },
     'Vehicles Delayed': {
@@ -561,16 +588,16 @@ export const Dashboard = () => {
 
         <div className="card" style={{ flex: 1 }}>
           <div className="card-header">
-            <div className="card-title">Active Vehicles Summary</div>
+            <div className="card-title">Active Deliveries Summary</div>
           </div>
           <div className="table-container">
             <table>
               <tbody>
-                {vehicles.slice(0, 3).map(v => (
+                {(liveDeliveries.length > 0 ? liveDeliveries : vehicles).slice(0, 3).map(v => (
                   <tr key={v.id}>
                     <td>
-                      <div style={{ fontWeight: 500 }}>{v.id}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{v.cargo}</div>
+                      <div style={{ fontWeight: 500 }}>{v.id} {v.vehicle ? `(${v.vehicle})` : ''}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{v.cargo} → {v.destination}</div>
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       {v.status === 'DELAYED' ? (
@@ -587,10 +614,10 @@ export const Dashboard = () => {
                           fontSize: '0.72rem',
                           whiteSpace: 'nowrap',
                         }}>
-                          {v.id === 'VAN-104' ? 'DELAYED (+45m Detour)' : `DELAYED ${v.delayMinutes ? `(+${v.delayMinutes}m)` : ''}`}
+                          {v.id === 'VAN-104' || v.id === 'DEL-1043' ? 'DELAYED (+45m Detour)' : `DELAYED ${v.delayMinutes ? `(+${v.delayMinutes}m)` : ''}`}
                         </span>
                       ) : (
-                        <Badge>{v.status}</Badge>
+                        <Badge>{v.status || 'IN TRANSIT'}</Badge>
                       )}
                     </td>
                   </tr>

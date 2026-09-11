@@ -18,7 +18,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import {
   Navigation, Search, Loader, MapPin, ChevronDown, ChevronUp,
-  ArrowRight, Play, Square, SkipForward, Crosshair, AlertTriangle, ShieldCheck
+  ArrowRight, Play, Square, SkipForward, SkipBack, Crosshair, AlertTriangle, ShieldCheck
 } from 'lucide-react';
 import { geocodePlace, getRouteRisk, BASE_URL } from '../services/api';
 import toast from 'react-hot-toast';
@@ -754,19 +754,9 @@ export const RoutePlanner = () => {
     }
   }, [coords]);
 
-  // ---- Navigation: step advancement + off-route rerouting ----
+  // ---- Navigation: off-route rerouting (manual stepping replaces automatic progression) ----
   useEffect(() => {
     if (!navigating || !coords || !navSteps.length) return;
-    const ADVANCE_M = 60; // advance step when within 60m of its maneuver point
-    let next = currentStep;
-    while (next < navSteps.length - 1) {
-      const loc = navSteps[next].location;
-      if (!loc) { next++; continue; }
-      const dist = haversineM(coords.lat, coords.lon, loc.lat, loc.lon);
-      if (dist < ADVANCE_M) next++;
-      else break;
-    }
-    if (next !== currentStep) setCurrentStep(next);
 
     // Off-route detection: if user is >80m from every point on navRoute, count up
     if (navRoute) {
@@ -778,7 +768,7 @@ export const RoutePlanner = () => {
         if (offRouteCount.current >= 3) {
           // Trigger reroute from current position
           offRouteCount.current = 0;
-          toast('\u21a9 Rerouting\u2026', { icon: '\ud83d\uddfa' });
+          toast('↩ Rerouting…', { icon: '🗺' });
           setFromPlace({ lat: coords.lat, lon: coords.lon, display_name: `Your location (${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)})` });
           setTimeout(() => handleFindRoutes(), 100);
         }
@@ -786,65 +776,54 @@ export const RoutePlanner = () => {
         offRouteCount.current = 0;
       }
     }
-  }, [coords, navigating, navSteps, currentStep, navRoute]);
+  }, [coords, navigating, navSteps, navRoute]);
 
-  // ---- Vehicle marker: update position & bearing along route on every GPS tick ----
-  useEffect(() => {
-    if (!navigating || !coords || !navRoute?.length) return;
-    const idx = findClosestRouteIdx(navRoute, coords.lat, coords.lon);
-    setVehicleRouteIdx(idx);
-    simIdxRef.current = idx;
-    // Compute bearing: look ahead a few points for smoother heading
-    const lookAhead = Math.min(idx + 3, navRoute.length - 1);
-    if (lookAhead > idx) {
-      const bearing = computeBearing(
-        navRoute[idx][0], navRoute[idx][1],
-        navRoute[lookAhead][0], navRoute[lookAhead][1]
-      );
-      setVehicleBearing(bearing);
+  // ---- Manual navigation stepping (strictly controlled by explicit user action) ----
+  const goToStep = useCallback((targetStep) => {
+    if (!navRoute?.length) return;
+    const totalSteps = navSteps.length || 1;
+    const clamped = Math.max(0, Math.min(targetStep, totalSteps - 1));
+    setCurrentStep(clamped);
+
+    // Determine target route index
+    let routeIdx = 0;
+    const step = navSteps[clamped];
+    if (step?.location?.lat != null && step?.location?.lon != null) {
+      routeIdx = findClosestRouteIdx(navRoute, step.location.lat, step.location.lon);
+    } else if (totalSteps > 1) {
+      routeIdx = Math.round((clamped / (totalSteps - 1)) * (navRoute.length - 1));
     }
-    // Progress fraction
-    setRouteProgress(navRoute.length > 1 ? idx / (navRoute.length - 1) : 0);
-  }, [coords, navigating, navRoute]);
 
-  // ---- Simulation: auto-advance vehicle when GPS is unavailable (demo mode) ----
-  // Mimics Google Maps navigation — moves every 500ms along route coords for smooth animation
-  useEffect(() => {
-    if (!navigating || !navRoute?.length) return;
-    const gpsAvailable = coords && (status === 'ok' || status === 'watching');
-    if (gpsAvailable) return; // real GPS handles it via the effect above
+    setVehicleRouteIdx(routeIdx);
 
-    // Reset to start
-    simIdxRef.current = 0;
-    setVehicleRouteIdx(0);
-    setVehicleBearing(0);
-    setRouteProgress(0);
+    // Compute heading towards next points
+    const lookAhead = Math.min(routeIdx + 3, navRoute.length - 1);
+    if (lookAhead > routeIdx) {
+      setVehicleBearing(computeBearing(
+        navRoute[routeIdx][0], navRoute[routeIdx][1],
+        navRoute[lookAhead][0], navRoute[lookAhead][1]
+      ));
+    }
 
-    simIntervalRef.current = setInterval(() => {
-      const next = simIdxRef.current + 1;
-      if (next >= navRoute.length) {
-        clearInterval(simIntervalRef.current);
-        return;
-      }
-      simIdxRef.current = next;
-      // Update vehicle position
-      setVehicleRouteIdx(next);
-      // Bearing from current to a few points ahead
-      const lookAhead = Math.min(next + 4, navRoute.length - 1);
-      if (lookAhead > next) {
-        setVehicleBearing(computeBearing(
-          navRoute[next][0], navRoute[next][1],
-          navRoute[lookAhead][0], navRoute[lookAhead][1]
-        ));
-      }
-      // Progress 0..1
-      setRouteProgress(next / (navRoute.length - 1));
-    }, 500);
+    setRouteProgress(totalSteps > 1 ? clamped / (totalSteps - 1) : 0);
 
-    return () => {
-      if (simIntervalRef.current) clearInterval(simIntervalRef.current);
-    };
-  }, [navigating, navRoute, coords, status]);
+    // Synchronize map focus to current vehicle step position
+    if (navRoute[routeIdx]) {
+      setMapFocus({ lat: navRoute[routeIdx][0], lon: navRoute[routeIdx][1], zoom: 15, t: Date.now() });
+    }
+  }, [navRoute, navSteps]);
+
+  const handleNextStep = () => {
+    if (currentStep < navSteps.length - 1) {
+      goToStep(currentStep + 1);
+    }
+  };
+
+  const handlePrevStep = () => {
+    if (currentStep > 0) {
+      goToStep(currentStep - 1);
+    }
+  };
 
 
   // ---------------------------------------------------------------------------
@@ -978,14 +957,23 @@ export const RoutePlanner = () => {
   const confirmNavigation = () => {
     setShowNavAlert(false);
     if (selectedIdx == null || !routes[selectedIdx]) return;
-    setNavSteps(routes[selectedIdx].steps);
-    setNavRoute(routes[selectedIdx].coords);
+    const steps = routes[selectedIdx].steps || [];
+    const rCoords = routes[selectedIdx].coords || [];
+    setNavSteps(steps);
+    setNavRoute(rCoords);
     setCurrentStep(0);
     setVehicleRouteIdx(0);
-    setVehicleBearing(0);
+    if (rCoords.length > 1) {
+      setVehicleBearing(computeBearing(rCoords[0][0], rCoords[0][1], rCoords[1][0], rCoords[1][1]));
+    } else {
+      setVehicleBearing(0);
+    }
     setRouteProgress(0);
     setFollowUser(true);
     setNavigating(true);
+    if (rCoords[0]) {
+      setMapFocus({ lat: rCoords[0][0], lon: rCoords[0][1], zoom: 15, t: Date.now() });
+    }
   };
 
   const stopNavigation = () => {
@@ -1480,28 +1468,46 @@ export const RoutePlanner = () => {
               </div>
 
               {/* HUD controls */}
-              <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' }}>
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => setCurrentStep(s => Math.min(s + 1, navSteps.length - 1))}
-                  style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <SkipForward size={12} /> Next step
-                </button>
-                <button
-                  onClick={() => setFollowUser(f => !f)}
-                  className={followUser ? 'btn btn-primary' : 'btn btn-secondary'}
-                  style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <Crosshair size={12} /> {followUser ? 'Following' : 'Follow me'}
-                </button>
-                <button
-                  className="btn btn-secondary"
-                  onClick={stopNavigation}
-                  style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--danger)' }}
-                >
-                  <Square size={12} /> End
-                </button>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handlePrevStep}
+                    disabled={currentStep <= 0}
+                    style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', opacity: currentStep <= 0 ? 0.5 : 1, cursor: currentStep <= 0 ? 'not-allowed' : 'pointer' }}
+                    title="Previous Step"
+                  >
+                    <SkipBack size={12} /> Prev Step
+                  </button>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--ink)' }}>
+                    Step {currentStep + 1} of {Math.max(navSteps.length, 1)}
+                  </span>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handleNextStep}
+                    disabled={currentStep >= navSteps.length - 1}
+                    style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', opacity: currentStep >= navSteps.length - 1 ? 0.5 : 1, cursor: currentStep >= navSteps.length - 1 ? 'not-allowed' : 'pointer' }}
+                    title="Next Step"
+                  >
+                    <SkipForward size={12} /> Next Step
+                  </button>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <button
+                    onClick={() => setFollowUser(f => !f)}
+                    className={followUser ? 'btn btn-primary' : 'btn btn-secondary'}
+                    style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Crosshair size={12} /> {followUser ? 'Following' : 'Follow me'}
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={stopNavigation}
+                    style={{ padding: '4px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--danger)' }}
+                  >
+                    <Square size={12} /> End
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -1947,7 +1953,7 @@ export const RoutePlanner = () => {
 
           {/* ---- Turn-by-turn step list (collapsible, shown outside of HUD) ---- */}
           {navSteps.length > 0 && (
-            <StepList steps={navSteps} currentStep={currentStep} />
+            <StepList steps={navSteps} currentStep={currentStep} onSelectStep={navigating ? goToStep : undefined} />
           )}
 
           {/* Coverage note */}
@@ -1985,7 +1991,7 @@ export const RoutePlanner = () => {
 // ---------------------------------------------------------------------------
 // Collapsible step list
 // ---------------------------------------------------------------------------
-const StepList = ({ steps, currentStep }) => {
+const StepList = ({ steps, currentStep, onSelectStep }) => {
   const [open, setOpen] = useState(false);
   return (
     <div className="card" style={{ padding: 0 }}>
@@ -2001,6 +2007,7 @@ const StepList = ({ steps, currentStep }) => {
           {steps.map((step, i) => (
             <div
               key={i}
+              onClick={() => onSelectStep && onSelectStep(i)}
               style={{
                 display: 'flex', gap: '10px', alignItems: 'flex-start',
                 padding: '7px 0', borderBottom: '1px solid var(--line)',
@@ -2010,7 +2017,9 @@ const StepList = ({ steps, currentStep }) => {
                 background: i === currentStep ? 'var(--sky-tint)' : 'none',
                 borderRadius: i === currentStep ? 5 : 0,
                 paddingLeft: i === currentStep ? 6 : 0,
+                cursor: onSelectStep ? 'pointer' : 'default',
               }}
+              title={onSelectStep ? `Jump to Step ${i + 1}` : undefined}
             >
               <span style={{ fontSize: '1rem', flexShrink: 0, width: 20, textAlign: 'center' }}>{step.icon}</span>
               <span style={{ flex: 1 }}>{step.instruction}</span>

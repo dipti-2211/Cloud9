@@ -119,7 +119,28 @@ html, body {
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  transition: transform 0.3s ease;
+  transition: width 0.25s ease, transform 0.25s ease;
+  position: relative;
+  z-index: 100;
+  flex-shrink: 0;
+}
+
+.sidebar.collapsed {
+  width: 68px;
+}
+
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 12px 0;
+  gap: 0;
+}
+
+.sidebar.collapsed .nav-item span {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-section-label {
+  display: none;
 }
 
 .sidebar-header {
@@ -343,34 +364,73 @@ tr:hover td { background-color: var(--sky-tint); }
    ========================================================================== */
 
 @media (max-width: 1100px) {
-  :root { --sidebar-width: 190px; }
   .map-section  { grid-column: span 12; height: 380px; }
   .side-panel   { grid-column: span 12; max-height: none; flex-direction: row; flex-wrap: wrap; }
   .side-panel > * { flex: 1 1 280px; }
   .kpi-row { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
 }
 
-@media (max-width: 860px) {
-  :root { --sidebar-width: 52px; --header-height: 52px; }
-  .sidebar { overflow: hidden; }
-  .sidebar-header { padding: 0 14px; justify-content: center; }
-  .sidebar-header > div { display: none; }
-  .nav-item span { display: none; }
-  .nav-item { padding: 12px; justify-content: center; gap: 0; border-right: none; }
-  .nav-item.active, .nav-item:hover { border-right: none; border-left: 3px solid var(--sky); }
+/* Tablet & Mobile responsive navigation (< 768px) */
+@media (max-width: 768px) {
+  :root { --header-height: 54px; }
+  .sidebar {
+    position: fixed !important;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 260px !important;
+    z-index: 10001 !important;
+    box-shadow: 4px 0 24px rgba(20, 38, 59, 0.25);
+    transform: translateX(0);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .sidebar.collapsed {
+    transform: translateX(-100%) !important;
+    width: 260px !important;
+  }
+  .sidebar.collapsed .nav-item span {
+    display: inline !important;
+  }
+  .sidebar.collapsed .nav-item {
+    justify-content: flex-start !important;
+    padding: 11px 20px !important;
+    gap: 12px !important;
+  }
+  .sidebar.collapsed .sidebar-section-label {
+    display: block !important;
+  }
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.5);
+    backdrop-filter: blur(2px);
+    z-index: 10000;
+    animation: popoverFadeIn 0.2s ease;
+  }
+  .main-content {
+    width: 100% !important;
+    max-width: 100vw !important;
+  }
   .kpi-row { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .map-section { height: 300px; }
-  .page-content { padding: 14px; }
-  .top-navbar { padding: 0 14px; gap: 12px; }
+  .page-content { padding: 12px; }
+  .top-navbar { padding: 0 12px; gap: 10px; }
+  .route-planner-grid { grid-template-columns: 1fr !important; }
+  .modal-content {
+    width: 95vw !important;
+    max-width: 95vw !important;
+    padding: 14px !important;
+  }
+  .modal-body { padding: 12px; }
+  .modal-two-col, .modal-split-view { flex-direction: column !important; }
 }
 
-@media (max-width: 600px) {
-  :root { --sidebar-width: 0px; --header-height: 48px; }
-  .sidebar { display: none; }
-  .kpi-row { grid-template-columns: 1fr 1fr; gap: 8px; }
-  .dashboard-grid { gap: 12px; }
-  .page-content { padding: 10px; }
-  .card { padding: 14px; }
+@media (max-width: 480px) {
+  :root { --header-height: 48px; }
+  .kpi-row { grid-template-columns: 1fr; gap: 8px; }
+  .dashboard-grid { gap: 10px; }
+  .page-content { padding: 8px; }
+  .card { padding: 12px; }
 }
 
 /* Route Planner — responsive grid */
@@ -907,4 +967,24 @@ tr:hover td { background-color: var(--sky-tint); }
 @keyframes slideInRight {
   from { opacity: 0; transform: translateX(110%); }
   to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ==========================================================================
+   Live Chat Layout & Mobile Responsiveness
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  .chat-sidebar-pane.hidden-mobile {
+    display: none !important;
+  }
+  .chat-main-pane.hidden-mobile-pane {
+    display: none !important;
+  }
+  .chat-sidebar-pane {
+    width: 100% !important;
+    border-right: none !important;
+  }
+  .chat-back-btn {
+    display: flex !important;
+  }
 }

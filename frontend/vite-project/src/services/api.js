@@ -6,7 +6,6 @@
 import {
   vehicles as mockVehicles,
   incidents as mockIncidents,
-  roads as mockRoads,
   deliveries as mockDeliveries,
   dashboardKPIs,
 } from '../data/mockData';
@@ -76,7 +75,8 @@ async function request(path, options = {}) {
   let token = auth.getToken();
   if (!token) token = await ensureToken();
 
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const headers = { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...(options.headers || {}) };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
@@ -228,7 +228,7 @@ export const roadsAPI = {
         if (roadName) incCountMap[roadName] = (incCountMap[roadName] || 0) + 1;
       });
 
-      const formattedSegments = segments.map(s => {
+      return segments.map(s => {
         const segKey = s.segment_key || s._id;
         const count = incCountMap[s._id] || incCountMap[s.segment_key] || incCountMap[s.road_name] || s.incidents_count || s.historical_incident_count || 0;
         const score = Math.round((s.current_risk_score ?? (s.current_risk_level === 'high' ? 0.88 : s.current_risk_level === 'medium' ? 0.48 : 0.15)) * 100);
@@ -255,19 +255,17 @@ export const roadsAPI = {
           isNew: Boolean(s.is_new || s.has_new_incident),
         };
       });
-
-      // Keep corridor roads (NH-06, NH-10, SH-37, NH-2) while adding all active segments
-      const existingRoadNames = new Set(formattedSegments.map(r => r.id));
-      const remainingMock = mockRoads.filter(m => !existingRoadNames.has(m.id));
-
-      return [...formattedSegments, ...remainingMock];
     } catch {
-      return mockRoads;
+      return [];
     }
   },
   create: (payload) => request('/api/roads',       { method: 'POST',   body: JSON.stringify(payload) }),
   update: (id, p)   => request(`/api/roads/${id}`, { method: 'PATCH',  body: JSON.stringify(p) }),
-  delete: (id)      => request(`/api/roads/${id}`, { method: 'DELETE' }),
+  delete: (id, deletionReason, details) => request(`/api/roads/${id}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ deletionReason, details })
+  }),
+  restore: (id)     => request(`/api/roads/${id}/restore`, { method: 'PATCH' }),
 };
 
 // ─── Incidents ───────────────────────────────────────────────────────────────
@@ -297,9 +295,10 @@ export const deliveriesAPI = {
 // Backend → { success, alerts:[...], total }
 // Returns plain array so Alerts.jsx can call .filter() directly
 export const alertsAPI = {
-  getAll:      async () => { const d = await request('/api/alerts'); return d.alerts ?? []; },
-  create:      (payload) => request('/api/alerts', { method: 'POST', body: JSON.stringify(payload) }),
-  acknowledge: (id)      => request(`/api/alerts/${id}/acknowledge`, { method: 'PATCH' }),
+  getAll:         async (params = '') => { const d = await request(`/api/alerts${params ? '?' + params : ''}`); return d.alerts ?? []; },
+  create:         (payload) => request('/api/alerts', { method: 'POST', body: JSON.stringify(payload) }),
+  acknowledge:    (id)      => request(`/api/alerts/${id}/acknowledge`, { method: 'PATCH' }),
+  acknowledgeAll: (ids)     => request('/api/alerts/acknowledge-all', { method: 'POST', body: JSON.stringify({ ids }) }),
 };
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -324,6 +323,38 @@ export const getForecastRisk = (lat, lon) => request(`/api/forecast-risk?lat=${l
 // ─── Geocoding ───────────────────────────────────────────────────────────────
 export const geocodePlace   = (q)        => request(`/api/geocode?q=${encodeURIComponent(q)}`);
 export const reverseGeocode = (lat, lon) => request(`/api/geocode/reverse?lat=${lat}&lon=${lon}`);
+
+// ─── Live Chat ───────────────────────────────────────────────────────────────
+export const chatAPI = {
+  getConversations: async () => {
+    const res = await request('/api/chat/conversations').catch(() => ({}));
+    return res.conversations || [];
+  },
+  createOrGetConversation: async (data) => {
+    const res = await request('/api/chat/conversations', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return res.conversation;
+  },
+  getMessages: async (conversationId) => {
+    const res = await request(`/api/chat/conversations/${conversationId}/messages`);
+    return res.messages || [];
+  },
+  sendMessage: async (conversationId, payload) => {
+    let body;
+    if (typeof FormData !== 'undefined' && payload instanceof FormData) {
+      body = payload;
+    } else {
+      body = JSON.stringify(payload);
+    }
+    const res = await request(`/api/chat/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      body,
+    });
+    return res.message;
+  },
+};
 
 // ─── Legacy api object  (Navbar / Dashboard / Alerts use this) ───────────────
 export const api = {

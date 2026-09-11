@@ -77,10 +77,28 @@ const roadSchema =
             enum: [
                 "OPEN",
                 "RESTRICTED",
-                "BLOCKED"
+                "BLOCKED",
+                "REMOVED"
             ],
 
             default: "OPEN"
+        },
+
+        deletionReason: {
+            type: String
+        },
+
+        deletedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User"
+        },
+
+        deletedByName: {
+            type: String
+        },
+
+        deletedAt: {
+            type: Date
         },
 
         district: {

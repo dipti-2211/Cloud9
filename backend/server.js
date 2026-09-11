@@ -63,6 +63,7 @@ const alertRoutes      = require("./routes/alertRoutes");
 const landslideRoutes  = require("./routes/landslideRoutes");
 const routeRiskRoutes  = require("./routes/routeRiskRoutes");
 const roadRoutes       = require("./routes/roadRoutes");
+const chatRoutes       = require("./routes/chatRoutes");
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const JWT_SECRET      = process.env.JWT_SECRET  || "supersecretjwtkey_ner_logistics_2026";
@@ -114,6 +115,14 @@ io.on("connection", (socket) => {
 
     const vehicleId = socket.handshake.query.vehicleId;
     if (vehicleId) socket.join(`vehicle:${vehicleId}`);
+
+    socket.on("join_conversation", (conversationId) => {
+        if (conversationId) socket.join(`conversation:${conversationId}`);
+    });
+
+    socket.on("leave_conversation", (conversationId) => {
+        if (conversationId) socket.leave(`conversation:${conversationId}`);
+    });
 
     socket.on("disconnect", () => { /* cleanup if needed */ });
 });
@@ -306,6 +315,7 @@ app.use("/api/alerts",     alertRoutes);
 app.use("/api/landslide",  landslideRoutes);
 app.use("/api/route-risk", routeRiskRoutes);
 app.use("/api/roads",      roadRoutes);
+app.use("/api/chat",       chatRoutes);
 
 
 // ==============================
@@ -499,14 +509,19 @@ app.post("/api/alerts", async (req, res) => {
 // PATCH /api/alerts/:id/acknowledge
 app.patch("/api/alerts/:id/acknowledge", async (req, res) => {
     const decoded = verifyToken(req);
-    if (!decoded) return res.status(401).json({ success: false, message: "Authentication required" });
+    const userId = decoded?.userId || "User";
     try {
         const alert = await Alert.findByIdAndUpdate(
             req.params.id,
-            { acknowledged: true, acknowledgedBy: decoded.userId, acknowledgedAt: new Date() },
+            { acknowledged: true, acknowledgedBy: userId, acknowledgedAt: new Date() },
             { new: true }
         );
         if (!alert) return res.status(404).json({ success: false, message: "Not found" });
+        const io_ = req.app.get("io");
+        if (io_) {
+            io_.emit("alert_acknowledged", { id: alert._id?.toString(), acknowledgedAt: alert.acknowledgedAt });
+            io_.to("dashboard").emit("alert_acknowledged", { id: alert._id?.toString(), acknowledgedAt: alert.acknowledgedAt });
+        }
         return res.json({ success: true, alert });
     } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
 });
@@ -518,7 +533,7 @@ app.patch("/api/alerts/:id/acknowledge", async (req, res) => {
 
 // GET /api/road-segments  — list, optional ?risk_level=high|medium|low
 app.get("/api/road-segments", async (req, res) => {
-    const filter = {};
+    const filter = { status: { $ne: "REMOVED" } };
     if (req.query.risk_level) filter.current_risk_level = req.query.risk_level;
     try {
         const segments = await RoadSegment.find(filter).sort({ current_risk_level: -1, road_name: 1 }).lean();
@@ -569,7 +584,7 @@ app.get("/api/road-segments", async (req, res) => {
 // GET /api/road-segments/:id
 app.get("/api/road-segments/:id", async (req, res) => {
     try {
-        const seg = await RoadSegment.findById(req.params.id);
+        const seg = await RoadSegment.findOne({ _id: req.params.id, status: { $ne: "REMOVED" } });
         if (!seg) return res.status(404).json({ success: false, message: "Road segment not found" });
         return res.json({ success: true, roadSegment: seg });
     } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
@@ -593,6 +608,75 @@ app.patch("/api/road-segments/:id/risk", async (req, res) => {
         return res.json({ success: true, roadSegment: seg });
     } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
 });
+
+// DELETE /api/road-segments/:id — soft delete segment with reason
+app.delete("/api/road-segments/:id", async (req, res) => {
+    const reason = (req.body.deletionReason || req.body.reason || "").trim();
+    const details = (req.body.details || req.body.additionalDetails || "").trim();
+    if (!reason) {
+        return res.status(400).json({ success: false, message: "A deletion reason is required to remove this road entry" });
+    }
+    const fullReason = details ? `${reason}: ${details}` : reason;
+    const decoded = verifyToken(req);
+    const deletedByName = decoded?.userId || "Administrator";
+    const deletedBy = decoded?.id || null;
+    const deletedAt = new Date();
+
+    try {
+        let seg = null;
+        try {
+            seg = await RoadSegment.findByIdAndUpdate(
+                req.params.id,
+                { status: "REMOVED", deletionReason: fullReason, deletedBy, deletedByName, deletedAt },
+                { new: true }
+            );
+        } catch {}
+
+        if (!seg) {
+            seg = await RoadSegment.findOneAndUpdate(
+                { segment_key: req.params.id },
+                { status: "REMOVED", deletionReason: fullReason, deletedBy, deletedByName, deletedAt },
+                { new: true }
+            );
+        }
+        if (!seg) {
+            seg = await RoadSegment.findOneAndUpdate(
+                { road_name: req.params.id },
+                { status: "REMOVED", deletionReason: fullReason, deletedBy, deletedByName, deletedAt },
+                { new: true }
+            );
+        }
+        if (!seg) {
+            try {
+                seg = await Road.findByIdAndUpdate(
+                    req.params.id,
+                    { status: "REMOVED", deletionReason: fullReason, deletedBy, deletedByName, deletedAt },
+                    { new: true }
+                );
+            } catch {}
+        }
+        if (!seg) return res.status(404).json({ success: false, message: "Road segment not found" });
+
+        const io_ = req.app.get("io");
+        const deletePayload = {
+            id: req.params.id,
+            roadId: seg._id?.toString(),
+            segment_key: seg.segment_key,
+            road_name: seg.road_name || seg.name,
+            reason: fullReason,
+            deletedByName,
+            deletedAt,
+        };
+        if (io_) {
+            io_.emit("road_deleted", deletePayload);
+            io_.to("dashboard").emit("road_deleted", deletePayload);
+        }
+        return res.json({ success: true, message: "Road removed successfully", roadSegment: seg });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: err.message });
+    }
+});
+
 
 
 // ==============================
@@ -1056,7 +1140,7 @@ const CRITICAL_ROADS_PATH = path.join(__dirname, "..", "risk-engine", "data", "c
 app.get("/api/critical-roads", async (req, res) => {
     // Prefer live Mongo data; fall back to file if collection is empty
     try {
-        const segs = await RoadSegment.find({}).lean();
+        const segs = await RoadSegment.find({ status: { $ne: "REMOVED" } }).lean();
         if (segs.length > 0) {
             const mapped = segs.map(s => {
                 const c = Array.isArray(s.geometry?.coordinates) ? s.geometry.coordinates : [];

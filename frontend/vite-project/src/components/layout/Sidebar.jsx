@@ -7,6 +7,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Truck, Route, AlertTriangle, Package,
   Bell, Settings, Navigation, UserPlus, Car, KeyRound, MapPin, AlertOctagon, UsersRound, Siren,
+  X, MessageSquare,
 } from 'lucide-react';
 import { auth } from '../../services/api';
 
@@ -16,14 +17,19 @@ const SECTION_LABEL = {
   padding:'12px 20px 4px', userSelect:'none',
 };
 
-const NavItem = ({ path, label, icon: Icon }) => (
-  <NavLink to={path} className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}>
-    <Icon size={19} />
+const NavItem = ({ path, label, icon: Icon, onClick, title }) => (
+  <NavLink
+    to={path}
+    onClick={onClick}
+    title={title || label}
+    className={({ isActive }) => isActive ? 'nav-item active' : 'nav-item'}
+  >
+    <Icon size={19} style={{ flexShrink: 0 }} />
     <span>{label}</span>
   </NavLink>
 );
 
-export const Sidebar = () => {
+export const Sidebar = ({ collapsed = false, isMobile = false, onClose }) => {
   const user    = auth.getUser();
   const role    = user?.role ?? '';
   const isAdmin = role === 'ADMIN';
@@ -37,6 +43,7 @@ export const Sidebar = () => {
     { path:'/deliveries',     label:'Deliveries',      icon:Package },
     { path:'/alerts',         label:'Alerts',          icon:Bell },
     { path:'/route-planner',   label:'Route Planner',   icon:Navigation },
+    ...(isAdmin || role === 'FIELD_OFFICER' ? [{ path:'/chat', label:'Live Chat', icon:MessageSquare }] : []),
     ...(isAdmin || role === 'FIELD_OFFICER' ? [{ path:'/incident-report', label:'Report Incident', icon:Siren }] : []),
     { path:'/critical-roads',  label:'Critical Roads',  icon:AlertOctagon },
   ];
@@ -56,28 +63,52 @@ export const Sidebar = () => {
     { path:'/settings', label:'Settings', icon:Settings },
   ];
 
+  const handleNavClick = () => {
+    if (isMobile && onClose) {
+      onClose();
+    }
+  };
+
   return (
-    <aside className="sidebar">
-      <div className="sidebar-header">
-        <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+    <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${isMobile ? 'mobile-drawer' : ''}`}>
+      <div className="sidebar-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'10px', overflow: 'hidden' }}>
           <div style={{ width:4, height:32, borderRadius:2, background:'var(--sky)', flexShrink:0 }} />
-          <div>
-            <div style={{ fontSize:'1rem', fontWeight:800, color:'var(--sky-dark)', letterSpacing:'-0.01em' }}>SIH26002</div>
-            <div style={{ fontSize:'0.65rem', color:'var(--slate)', fontWeight:500, letterSpacing:'0.06em', textTransform:'uppercase', marginTop:1 }}>
-              Logistics Intelligence
+          {!collapsed && (
+            <div>
+              <div style={{ fontSize:'1rem', fontWeight:800, color:'var(--sky-dark)', letterSpacing:'-0.01em' }}>SIH26002</div>
+              <div style={{ fontSize:'0.65rem', color:'var(--slate)', fontWeight:500, letterSpacing:'0.06em', textTransform:'uppercase', marginTop:1 }}>
+                Logistics Intelligence
+              </div>
             </div>
-          </div>
+          )}
         </div>
+        {isMobile && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close navigation"
+            style={{ background: 'none', border: 'none', color: 'var(--slate)', cursor: 'pointer', padding: 4, display: 'flex' }}
+          >
+            <X size={18} />
+          </button>
+        )}
       </div>
 
       <nav className="sidebar-nav">
-        {mainItems.map(item => <NavItem key={item.path} {...item} />)}
+        {mainItems.map(item => (
+          <NavItem key={item.path} {...item} onClick={handleNavClick} title={collapsed ? item.label : undefined} />
+        ))}
 
-        <div style={SECTION_LABEL}>Personnel</div>
-        {personnelItems.map(item => <NavItem key={item.path} {...item} />)}
+        {!collapsed && <div className="sidebar-section-label" style={SECTION_LABEL}>Personnel</div>}
+        {personnelItems.map(item => (
+          <NavItem key={item.path} {...item} onClick={handleNavClick} title={collapsed ? item.label : undefined} />
+        ))}
 
-        <div style={SECTION_LABEL}>System</div>
-        {systemItems.map(item => <NavItem key={item.path} {...item} />)}
+        {!collapsed && <div className="sidebar-section-label" style={SECTION_LABEL}>System</div>}
+        {systemItems.map(item => (
+          <NavItem key={item.path} {...item} onClick={handleNavClick} title={collapsed ? item.label : undefined} />
+        ))}
       </nav>
     </aside>
   );

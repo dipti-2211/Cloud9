@@ -10,9 +10,11 @@ import { useEffect, useState, Component } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { AlertOctagon, RefreshCw, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
-import { getCriticalRoads } from '../services/api';
+import { AlertOctagon, RefreshCw, ChevronDown, ChevronUp, AlertTriangle, Trash2, X } from 'lucide-react';
+import { getCriticalRoads, roadsAPI, auth } from '../services/api';
 import { PageHeader } from '../components/common/PageHeader';
+import { useSocket } from '../hooks/useSocket';
+import toast from 'react-hot-toast';
 
 // Error boundary to prevent entire page crashing if Leaflet encounters a rendering issue
 class MapErrorBoundary extends Component {
@@ -202,7 +204,67 @@ export const CriticalRoads = () => {
     }
   };
 
+  const { socket } = useSocket();
+  const user = auth.getUser();
+  const isAdmin = user?.role === 'ADMIN';
+
+  const [deleteModalSeg, setDeleteModalSeg] = useState(null);
+  const [deleteReason,   setDeleteReason]   = useState('Road reconstructed');
+  const [deleteDetails,  setDeleteDetails]  = useState('');
+  const [deleting,       setDeleting]       = useState(false);
+
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    const s = socket?.current || socket;
+    if (!s || typeof s.on !== 'function') return;
+
+    const handleRoadDeleted = (payload) => {
+      const delId = payload?.id || payload?.roadId || payload?.segment_key;
+      const delName = payload?.road_name;
+      setSegments(prev => prev.filter(r =>
+        r._id !== delId &&
+        r.segment_key !== delId &&
+        r.id !== delId &&
+        r.road_name !== delName &&
+        r._id !== payload?.roadId &&
+        r.segment_key !== payload?.segment_key
+      ));
+    };
+
+    s.on('road_deleted', handleRoadDeleted);
+    s.on('road_segment_updated', load);
+
+    return () => {
+      s.off('road_deleted', handleRoadDeleted);
+      s.off('road_segment_updated', load);
+    };
+  }, [socket]);
+
+  const handleDeleteSegmentConfirm = async () => {
+    if (!deleteModalSeg) return;
+    const targetId = deleteModalSeg._id || deleteModalSeg.segment_key || deleteModalSeg.id;
+    if (!targetId) return;
+
+    setDeleting(true);
+    try {
+      await roadsAPI.delete(targetId, deleteReason, deleteDetails);
+      setSegments(prev => prev.filter(s =>
+        s._id !== targetId &&
+        s.segment_key !== targetId &&
+        s.id !== targetId &&
+        s.road_name !== deleteModalSeg.road_name
+      ));
+      toast.success(`"${deleteModalSeg.road_name || targetId}" removed from critical segments`);
+      setDeleteModalSeg(null);
+      setDeleteDetails('');
+      setDeleteReason('Road reconstructed');
+    } catch (err) {
+      toast.error(err.message || 'Failed to remove road segment');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const selectedMidpoint = getSegMidpoint(selected);
   const mapCenter = selectedMidpoint || [25.1375, 93.0080];
@@ -279,9 +341,38 @@ export const CriticalRoads = () => {
                     </div>
                   )}
 
-                  <div style={{ marginTop: 4, fontSize: '0.7rem', color: 'var(--slate)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    {isExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                    {isExpanded ? 'Hide villages' : 'Show villages'}
+                  <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--slate)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      {isExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                      {isExpanded ? 'Hide villages' : 'Show villages'}
+                    </div>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteModalSeg(seg);
+                          setDeleteReason('Road reconstructed');
+                          setDeleteDetails('');
+                        }}
+                        style={{
+                          background: 'rgba(239,68,68,0.08)',
+                          border: '1px solid rgba(239,68,68,0.3)',
+                          borderRadius: 6,
+                          padding: '2px 8px',
+                          color: '#dc2626',
+                          fontSize: '0.7rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                        }}
+                        title="Remove critical road segment"
+                      >
+                        <Trash2 size={11} /> Remove
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -374,6 +465,143 @@ export const CriticalRoads = () => {
           Click a segment in the table or on the map for details.
         </div>
       </div>
+
+      {/* Delete / Remove Road Segment Confirmation Modal */}
+      {deleteModalSeg && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '16px',
+        }} onClick={() => !deleting && setDeleteModalSeg(null)}>
+          <div style={{
+            background: 'var(--white)',
+            borderRadius: 14,
+            width: '100%',
+            maxWidth: 500,
+            overflow: 'hidden',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+            border: '1px solid var(--line)',
+            animation: 'popoverFadeIn 0.2s ease',
+          }} onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '16px 20px', borderBottom: '1px solid var(--line)',
+              background: 'rgba(239, 68, 68, 0.06)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{
+                  width: 34, height: 34, borderRadius: '50%',
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: '#dc2626',
+                }}>
+                  <AlertTriangle size={18} />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 700, color: 'var(--ink)' }}>
+                    Remove Critical Segment
+                  </h3>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--slate)', marginTop: 2 }}>
+                    {deleteModalSeg.road_name || deleteModalSeg.id} ({deleteModalSeg.district || 'NER'})
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeleteModalSeg(null)}
+                disabled={deleting}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--slate)', padding: 4 }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div style={{ padding: '20px' }}>
+              <p style={{ margin: '0 0 16px', fontSize: '0.84rem', color: 'var(--slate)', lineHeight: 1.5 }}>
+                Removing this road segment will mark it as <strong>REMOVED</strong>, taking it off the critical connectivity and vulnerability list.
+              </p>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={{
+                  display: 'block', fontSize: '0.75rem', fontWeight: 700,
+                  color: 'var(--ink)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em',
+                }}>
+                  Reason for Removal *
+                </label>
+                <select
+                  value={deleteReason}
+                  onChange={e => setDeleteReason(e.target.value)}
+                  style={{
+                    width: '100%', padding: '9px 12px', borderRadius: 8,
+                    border: '1px solid var(--line)', background: 'var(--white)',
+                    fontSize: '0.86rem', color: 'var(--ink)', outline: 'none',
+                  }}
+                >
+                  <option value="Road reconstructed">Road reconstructed / alternate bridge built</option>
+                  <option value="Duplicate entry">Duplicate entry</option>
+                  <option value="Incorrect data">Incorrect connectivity data</option>
+                  <option value="Segment decommissioned">Segment decommissioned</option>
+                  <option value="Other">Other reason (specify below)</option>
+                </select>
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <label style={{
+                  display: 'block', fontSize: '0.75rem', fontWeight: 700,
+                  color: 'var(--ink)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em',
+                }}>
+                  Additional Details {deleteReason === 'Other' ? '*' : '(Optional)'}
+                </label>
+                <textarea
+                  rows={3}
+                  value={deleteDetails}
+                  onChange={e => setDeleteDetails(e.target.value)}
+                  placeholder={deleteReason === 'Other' ? "Please explain why this road is being removed..." : "e.g. Bypass opened via NH-27, settlements now connected"}
+                  style={{
+                    width: '100%', padding: '9px 12px', borderRadius: 8,
+                    border: '1px solid var(--line)', background: 'var(--white)',
+                    fontSize: '0.84rem', color: 'var(--ink)', outline: 'none',
+                    resize: 'vertical', fontFamily: 'inherit',
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div style={{
+              display: 'flex', justifyContent: 'flex-end', gap: 10,
+              padding: '14px 20px', borderTop: '1px solid var(--line)', background: 'var(--surface-elevated)',
+            }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setDeleteModalSeg(null)}
+                disabled={deleting}
+                style={{ padding: '8px 16px', fontSize: '0.84rem' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteSegmentConfirm}
+                disabled={!deleteReason || (deleteReason === 'Other' && !deleteDetails.trim()) || deleting}
+                style={{
+                  padding: '8px 18px', fontSize: '0.84rem', fontWeight: 700,
+                  borderRadius: 7, border: 'none',
+                  cursor: !deleteReason || (deleteReason === 'Other' && !deleteDetails.trim()) || deleting ? 'not-allowed' : 'pointer',
+                  background: !deleteReason || (deleteReason === 'Other' && !deleteDetails.trim()) || deleting ? '#f87171' : '#dc2626',
+                  color: '#fff', display: 'inline-flex', alignItems: 'center', gap: 6,
+                }}
+              >
+                {deleting ? 'Removing…' : 'Confirm & Remove'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

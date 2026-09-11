@@ -17,6 +17,7 @@ import { Districts } from './pages/Districts';
 import { CriticalRoads } from './pages/CriticalRoads';
 import { Personnel } from './pages/Personnel';
 import { IncidentReport } from './pages/IncidentReport';
+import { Chat } from './pages/Chat';
 import { auth } from './services/api';
 import { LanguageProvider } from './i18n/LanguageContext';
 
@@ -83,6 +84,8 @@ function App() {
             <Route path="personnel"           element={<AdminRoute><Personnel /></AdminRoute>} />
             {/* Field officer incident reporting — admin + field officer only */}
             <Route path="incident-report"     element={<RoleRoute allowedRoles={['ADMIN','FIELD_OFFICER']}><IncidentReport /></RoleRoute>} />
+            {/* Field Officer <-> Admin Live Chat */}
+            <Route path="chat"                element={<RoleRoute allowedRoles={['ADMIN','FIELD_OFFICER']}><Chat /></RoleRoute>} />
           </Route>
 
           {/* Catch-all */}

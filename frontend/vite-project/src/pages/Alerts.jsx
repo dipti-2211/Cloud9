@@ -308,7 +308,7 @@ const CardB = ({ alert, coords, isExample, onView }) => {
         fontSize: '0.88rem', lineHeight: 1.6,
         color: 'var(--sky-dark)', fontWeight: 500,
         margin: '0 0 14px',
-        display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+        wordBreak: 'break-word',
       }}>
         {alert.message}
       </p>
@@ -317,7 +317,7 @@ const CardB = ({ alert, coords, isExample, onView }) => {
           fontSize: '0.78rem', lineHeight: 1.5,
           color: 'var(--slate)', fontStyle: 'italic',
           margin: '-8px 0 14px',
-          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+          wordBreak: 'break-word',
         }}>
           {alert.regionalMessage}
         </p>
@@ -387,18 +387,17 @@ const CardC = ({ alert, coords, isExample, onView, className = '' }) => {
                 {isExample && <span style={{ fontSize: '0.56rem', fontWeight: 700, padding: '1px 5px', background: 'var(--sky-tint)', color: 'var(--slate)', border: '1px solid var(--sky-tint-2)', borderRadius: 12 }}>DEMO</span>}
               </div>
             </div>
-            {/* Message in sky-blue */}
+            {/* Message in sky-blue — full complete message */}
             <p style={{
               fontSize: '0.83rem', lineHeight: 1.55, color: 'var(--sky-dark)', fontWeight: 500,
-              margin: 0, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+              margin: '0 0 6px', wordBreak: 'break-word',
             }}>
               {alert.message}
             </p>
             {alert.regionalMessage && (
               <p style={{
                 fontSize: '0.75rem', lineHeight: 1.5, color: 'var(--slate)', fontStyle: 'italic',
-                marginTop: 4, marginBottom: 0,
-                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                marginTop: 4, marginBottom: 0, wordBreak: 'break-word',
               }}>
                 {alert.regionalMessage}
               </p>
@@ -445,8 +444,8 @@ const CardD = ({ alert, coords, isExample, onView }) => {
               <SrcIcon size={9} />{label}
             </div>
           </div>
-          {/* Message in sky-blue */}
-          <p style={{ fontSize: '0.76rem', color: 'var(--sky-dark)', fontWeight: 500, margin: 0, lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+          {/* Message in sky-blue — full text */}
+          <p style={{ fontSize: '0.76rem', color: 'var(--sky-dark)', fontWeight: 500, margin: 0, lineHeight: 1.45, wordBreak: 'break-word' }}>
             {alert.message}
           </p>
         </div>
@@ -541,13 +540,21 @@ export const Alerts = () => {
 
   const fetchAlerts = async (isInitial = false) => {
     try {
-      const data = await api.getAlerts();
+      const data = await alertsAPI.getAll();
       if (!isInitial) {
         // Poll fallback: only process alerts not already seen via socket
         data.filter(a => !seenIds.current.has(a._id)).forEach(handleNewAlert);
       }
       data.forEach(a => seenIds.current.add(a._id));
-      if (isInitial) { setAlerts(data); setError(null); }
+      if (isInitial) {
+        setAlerts(data);
+        setError(null);
+        // Automatically acknowledge unacknowledged alerts when visiting the Alerts page
+        const unack = data.filter(a => !a.acknowledged);
+        if (unack.length > 0) {
+          alertsAPI.acknowledgeAll(unack.map(a => a._id)).catch(() => {});
+        }
+      }
     } catch {
       if (isInitial) setError('Could not load alerts — is the backend running?');
     } finally {

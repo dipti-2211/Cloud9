@@ -8,7 +8,7 @@
  */
 
 export const dashboardKPIs = [
-  { label: 'Active Vehicles',  value: '142', icon: 'truck',          status: 'accent'   },
+  { label: 'Active Deliveries', value: '142', icon: 'truck',          status: 'accent'   },
   { label: 'Vehicles Delayed', value: '18',  icon: 'clock',          status: 'warning'  },
   { label: 'Blocked Roads',    value: '4',   icon: 'alert-triangle', status: 'danger'   },
   { label: 'Active Incidents', value: '7',   icon: 'activity',       status: 'danger'   },

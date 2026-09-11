@@ -1,23 +1,15 @@
-const express =
-    require("express");
-
+const express = require("express");
 const {
-    getAlerts
-} =
-    require(
-        "../controllers/alertController"
-    );
+    getAlerts,
+    acknowledgeAlert,
+    acknowledgeAllAlerts,
+} = require("../controllers/alertController");
 
+const router = express.Router();
 
-const router =
-    express.Router();
+router.get("/", getAlerts);
+router.post("/acknowledge-all", acknowledgeAllAlerts);
+router.patch("/:id/acknowledge", acknowledgeAlert);
+router.post("/:id/acknowledge", acknowledgeAlert);
 
-
-router.get(
-    "/",
-    getAlerts
-);
-
-
-module.exports =
-    router;
+module.exports = router;

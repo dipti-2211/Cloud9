@@ -22,7 +22,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import toast from 'react-hot-toast';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Camera, X, MapPin, Loader, RefreshCw, Eye } from 'lucide-react';
+import { Camera, X, MapPin, Loader, RefreshCw, Eye, MessageSquare } from 'lucide-react';
 import { useUserLocation } from '../hooks/useUserLocation';
 import { reverseGeocode, incidentsAPI } from '../services/api';
 import { useLang } from '../i18n/LanguageContext';
@@ -124,7 +124,7 @@ const hazardIcon = L.divIcon({
 });
 
 // ─── IncidentMapModal ─────────────────────────────────────────────────────────
-const IncidentMapModal = ({ incident, onClose }) => {
+const IncidentMapModal = ({ incident, onClose, onMessageOfficer }) => {
   if (!incident) return null;
   const lat = incident.lat ?? 25.5;
   const lon = incident.lon ?? 92.5;
@@ -215,6 +215,29 @@ const IncidentMapModal = ({ incident, onClose }) => {
           <div style={{ fontSize: '0.78rem', color: 'var(--slate)', fontFamily: 'monospace' }}>
             {lat.toFixed(5)}, {lon.toFixed(5)}
           </div>
+          {onMessageOfficer && (
+            <button
+              onClick={() => onMessageOfficer(incident)}
+              style={{
+                marginTop: 10,
+                width: '100%',
+                padding: '6px 10px',
+                borderRadius: 6,
+                background: 'var(--sky-tint)',
+                color: 'var(--sky-dark)',
+                border: '1px solid var(--sky-tint-2)',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+              }}
+            >
+              <MessageSquare size={13} /> Message Reporting Officer
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -529,7 +552,7 @@ export const Incidents = () => {
                 <th>Severity</th>
                 <th>Time Reported</th>
                 <th>Status</th>
-                <th>Map</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -592,21 +615,38 @@ export const Incidents = () => {
                   <td>{inc.time}</td>
                   <td><Badge type={inc.status === 'ACTIVE' ? 'danger' : 'default'}>{t(inc.status) || inc.status}</Badge></td>
                   <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
-                    {(inc.lat != null || inc.isLive) && (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      {(inc.lat != null || inc.isLive) && (
+                        <button
+                          onClick={() => setMapTarget(inc)}
+                          title="View on Map"
+                          style={{
+                            padding: '4px 8px', borderRadius: 6,
+                            background: 'linear-gradient(135deg,#0284c7,#0ea5e9)',
+                            color: '#fff', border: 'none',
+                            fontSize: '0.72rem', fontWeight: 700,
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                            boxShadow: '0 1px 6px rgba(14,165,233,0.3)',
+                          }}
+                        >
+                          <Eye size={11} /> View
+                        </button>
+                      )}
                       <button
-                        onClick={() => setMapTarget(inc)}
+                        onClick={() => navigate(`/chat?incidentId=${inc.rawId || inc.id}&officer=${encodeURIComponent(inc.officerName || 'Field Officer')}`)}
+                        title="Message reporting officer"
                         style={{
-                          padding: '4px 10px', borderRadius: 6,
-                          background: 'linear-gradient(135deg,#0284c7,#0ea5e9)',
-                          color: '#fff', border: 'none',
-                          fontSize: '0.72rem', fontWeight: 700,
+                          padding: '4px 8px', borderRadius: 6,
+                          background: 'var(--sky-tint)',
+                          color: 'var(--sky-dark)',
+                          border: '1px solid var(--sky-tint-2)',
+                          fontSize: '0.72rem', fontWeight: 600,
                           cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
-                          boxShadow: '0 1px 6px rgba(14,165,233,0.3)',
                         }}
                       >
-                        <Eye size={11} /> View
+                        <MessageSquare size={11} /> Chat
                       </button>
-                    )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -616,7 +656,16 @@ export const Incidents = () => {
       </div>
 
       {/* Incident Map Modal */}
-      {mapTarget && <IncidentMapModal incident={mapTarget} onClose={() => setMapTarget(null)} />}
+      {mapTarget && (
+        <IncidentMapModal
+          incident={mapTarget}
+          onClose={() => setMapTarget(null)}
+          onMessageOfficer={(inc) => {
+            setMapTarget(null);
+            navigate(`/chat?incidentId=${inc.rawId || inc.id}&officer=${encodeURIComponent(inc.officerName || 'Field Officer')}`);
+          }}
+        />
+      )}
 
       {/* Report Modal */}
       <Modal isOpen={isModalOpen} onClose={_resetForm} title="Report New Incident" footer={modalFooter}>

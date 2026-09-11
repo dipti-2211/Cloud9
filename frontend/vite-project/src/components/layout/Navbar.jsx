@@ -1,20 +1,31 @@
-import { Bell, User, Activity, LogOut, AlertTriangle, BellRing, X, MapPin, Route, Shield } from 'lucide-react';
+import { Bell, User, Activity, LogOut, AlertTriangle, BellRing, X, MapPin, Route, Shield, Menu } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useState, useEffect, useRef } from 'react';
-import { api, auth, authAPI } from '../../services/api';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { api, auth, authAPI, alertsAPI } from '../../services/api';
 import { useLang } from '../../i18n/LanguageContext';
 import { useSocket } from '../../hooks/useSocket';
 
 // ── Notification dropdown ─────────────────────────────────────────────────
-const NotificationPanel = ({ onClose }) => {
+const NotificationPanel = ({ onClose, onAlertsAcknowledged }) => {
   const [alerts,  setAlerts]  = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.getAlerts()
-      .then(data => { setAlerts(data.slice(0, 8)); setLoading(false); })
+    alertsAPI.getAll()
+      .then(data => {
+        const list = Array.isArray(data) ? data : [];
+        setAlerts(list.slice(0, 8));
+        setLoading(false);
+
+        // Auto-acknowledge visible unacknowledged alerts
+        const unack = list.slice(0, 8).filter(a => !a.acknowledged);
+        if (unack.length > 0) {
+          alertsAPI.acknowledgeAll(unack.map(a => a._id)).catch(() => {});
+          if (onAlertsAcknowledged) onAlertsAcknowledged();
+        }
+      })
       .catch(() => { setAlerts([]); setLoading(false); });
-  }, []);
+  }, [onAlertsAcknowledged]);
 
   const RISK_COLOR = {
     'Very High': 'var(--danger)',   'High':     'var(--danger)',
@@ -25,7 +36,7 @@ const NotificationPanel = ({ onClose }) => {
   return (
     <div style={{
       position:'absolute', top:'calc(100% + 10px)', right:0,
-      width:340, maxHeight:440,
+      width:360, maxHeight:460,
       background:'var(--white)', border:'1px solid var(--line)',
       borderRadius:12, boxShadow:'0 8px 32px rgba(20,38,59,.14)',
       zIndex:9999, display:'flex', flexDirection:'column', overflow:'hidden',
@@ -65,7 +76,7 @@ const NotificationPanel = ({ onClose }) => {
             const SrcIcon = a.source === 'map-click' ? MapPin : Route;
             return (
               <div key={a._id ?? i} style={{
-                display:'flex', gap:12, padding:'11px 16px',
+                display:'flex', gap:12, padding:'12px 16px',
                 borderBottom:'1px solid var(--line)', borderLeft:`3px solid ${color}`,
                 background: i === 0 ? 'var(--sky-tint)' : 'var(--white)', transition:'background .12s',
               }}
@@ -77,17 +88,22 @@ const NotificationPanel = ({ onClose }) => {
                   <AlertTriangle size={14} />
                 </div>
                 <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:2 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:3 }}>
                     <span style={{ fontSize:'0.72rem', fontWeight:700, color, textTransform:'uppercase' }}>
                       {a.riskCategory} Risk
                     </span>
                     <span style={{ fontSize:'0.68rem', color:'var(--slate-soft)', flexShrink:0 }}>{time}</span>
                   </div>
-                  <div style={{ fontSize:'0.8rem', color:'var(--ink)', lineHeight:1.4,
-                    overflow:'hidden', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical' }}>
+                  {/* Full complete message text without ellipsis or line clipping */}
+                  <div style={{ fontSize:'0.82rem', color:'var(--ink)', lineHeight:1.45, wordBreak:'break-word' }}>
                     {a.message}
                   </div>
-                  <div style={{ display:'flex', alignItems:'center', gap:4, marginTop:3, fontSize:'0.7rem', color:'var(--slate)' }}>
+                  {a.regionalMessage && (
+                    <div style={{ fontSize:'0.76rem', color:'var(--slate)', fontStyle:'italic', marginTop:3, wordBreak:'break-word' }}>
+                      {a.regionalMessage}
+                    </div>
+                  )}
+                  <div style={{ display:'flex', alignItems:'center', gap:4, marginTop:4, fontSize:'0.7rem', color:'var(--slate)' }}>
                     <SrcIcon size={10} />
                     {a.source === 'map-click' ? 'Map click' : 'Route check'} · {a.latitude?.toFixed(4)}, {a.longitude?.toFixed(4)}
                   </div>
@@ -113,7 +129,7 @@ const NotificationPanel = ({ onClose }) => {
 };
 
 // ── Navbar ────────────────────────────────────────────────────────────────
-export const Navbar = () => {
+export const Navbar = ({ onToggleSidebar, sidebarCollapsed }) => {
   const navigate = useNavigate();
   const [bellOpen,    setBellOpen]    = useState(false);
   const [alertCount,  setAlertCount]  = useState(0);
@@ -128,25 +144,38 @@ export const Navbar = () => {
   const displayName = user?.name || (user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : user?.firstName || user?.userId || 'Administrator');
   const roleLabel = { ADMIN:'Admin', FIELD_OFFICER:'Field Officer', VEHICLE_OPERATOR:'Vehicle Operator' }[user?.role] ?? user?.role ?? 'User';
 
+  const loadUnreadCount = useCallback(() => {
+    alertsAPI.getAll()
+      .then(all => {
+        const list = Array.isArray(all) ? all : [];
+        const unread = list.filter(a => !a.acknowledged);
+        setAlertCount(unread.length);
+      })
+      .catch(() => {});
+  }, []);
+
   // Poll alert count every 30 s + instant socket refresh
   useEffect(() => {
-    const load = () => api.getAlerts().then(d => setAlertCount(d.length)).catch(() => {});
-    load();
-    const id = setInterval(load, 30000);
+    loadUnreadCount();
+    const id = setInterval(loadUnreadCount, 30000);
 
     const s = socket?.current || socket;
     if (s && typeof s.on === 'function') {
-      s.on('alert_created', load);
-      s.on('incident_created', load);
+      s.on('alert_created', loadUnreadCount);
+      s.on('alert_acknowledged', loadUnreadCount);
+      s.on('alerts_acknowledged_bulk', loadUnreadCount);
+      s.on('incident_created', loadUnreadCount);
     }
     return () => {
       clearInterval(id);
       if (s && typeof s.off === 'function') {
-        s.off('alert_created', load);
-        s.off('incident_created', load);
+        s.off('alert_created', loadUnreadCount);
+        s.off('alert_acknowledged', loadUnreadCount);
+        s.off('alerts_acknowledged_bulk', loadUnreadCount);
+        s.off('incident_created', loadUnreadCount);
       }
     };
-  }, [socket]);
+  }, [socket, loadUnreadCount]);
 
   // Close on outside click
   useEffect(() => {
@@ -165,8 +194,32 @@ export const Navbar = () => {
 
   return (
     <header className="top-navbar">
-      <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-        <h2 style={{ fontSize:'1rem', fontWeight:700, color:'var(--ink)' }}>Command Center</h2>
+      <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+        {/* Hamburger toggle button */}
+        <button
+          type="button"
+          onClick={onToggleSidebar}
+          aria-label="Toggle Navigation Sidebar"
+          title={sidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+          style={{
+            background: 'none',
+            border: '1px solid var(--line)',
+            borderRadius: 7,
+            padding: '6px 8px',
+            cursor: 'pointer',
+            color: 'var(--slate)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'all 0.15s ease',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--sky-tint)'; e.currentTarget.style.color = 'var(--sky-dark)'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--slate)'; }}
+        >
+          <Menu size={18} />
+        </button>
+
+        <h2 style={{ fontSize:'1rem', fontWeight:700, color:'var(--ink)', margin:0 }}>Command Center</h2>
       </div>
 
       <div style={{ display:'flex', alignItems:'center', gap:'16px' }}>
@@ -251,7 +304,7 @@ export const Navbar = () => {
               </span>
             )}
           </button>
-          {bellOpen && <NotificationPanel onClose={() => setBellOpen(false)} />}
+          {bellOpen && <NotificationPanel onClose={() => setBellOpen(false)} onAlertsAcknowledged={loadUnreadCount} />}
         </div>
 
         {/* User avatar + dropdown */}

@@ -50,6 +50,12 @@ const roadSegmentSchema = new Schema(
         current_risk_score:  { type: Number, default: 0, min: 0, max: 1 },
         last_updated:        { type: Date,   default: Date.now },
 
+        status:              { type: String, enum: ["OPEN", "RESTRICTED", "BLOCKED", "REMOVED"], default: "OPEN" },
+        deletionReason:      { type: String },
+        deletedBy:           { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        deletedByName:       { type: String },
+        deletedAt:           { type: Date },
+
         is_demo: { type: Boolean, default: false },
     },
     { timestamps: true }
