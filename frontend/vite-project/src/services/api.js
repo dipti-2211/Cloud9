@@ -34,9 +34,11 @@ export const auth = {
 };
 
 // ─── Silent auto-login: get or refresh a token transparently ────────────────
-// Called before any write operation so the user never sees "Authentication required"
+// forceRefresh=true clears any cached/stale token first so a dead JWT is never reused.
 let _tokenRefreshPromise = null;
-export async function ensureToken() {
+export async function ensureToken(forceRefresh = false) {
+  if (forceRefresh) auth.clearSession(); // discard stale token before checking
+
   let token = auth.getToken();
   if (token) return token;
 

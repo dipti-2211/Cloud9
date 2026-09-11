@@ -147,17 +147,30 @@ export const IncidentReport = () => {
     reader.onload = (ev) => setPreview(ev.target.result);
     reader.readAsDataURL(f);
 
-    // Auto-analyze photo via backend Gemini Vision endpoint
-    const token = await ensureToken();
+    // Auto-analyze photo via backend Gemini Vision endpoint with force-refresh token & 401 retry
+    let token = await ensureToken(true);
     setAnalyzing(true);
     try {
-      const form = new FormData();
-      form.append('photo', f);
-      const res = await fetch(`${API_BASE}/api/analyze-photo`, {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: form,
-      });
+      const buildPhotoForm = () => {
+        const form = new FormData();
+        form.append('photo', f);
+        return form;
+      };
+      const analyzeWithToken = (authToken) =>
+        fetch(`${API_BASE}/api/analyze-photo`, {
+          method: 'POST',
+          headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+          body: buildPhotoForm(),
+        });
+
+      let res = await analyzeWithToken(token);
+      if (res.status === 401) {
+        const freshToken = await ensureToken(true);
+        if (freshToken) {
+          res = await analyzeWithToken(freshToken);
+        }
+      }
+
       const data = await res.json();
       if (data.success) {
         setAnalysis(data);
@@ -233,8 +246,8 @@ export const IncidentReport = () => {
       return;
     }
 
-    // Get or silently refresh auth token
-    const token = await ensureToken();
+    // Get token — always force-refresh so we never send a stale JWT
+    let token = await ensureToken(true);
     if (!token) {
       toast.error('Unable to authenticate. Please log in first.');
       return;
@@ -243,7 +256,9 @@ export const IncidentReport = () => {
     setSubmitting(true);
     setResult(null);
 
-    try {
+    // Build FormData inside a factory so it can be safely rebuilt on retry
+    // (a FormData body is consumed on the first fetch; rebuilding avoids stream errors)
+    const buildForm = () => {
       const form = new FormData();
       form.append('lat',                 usedLat);
       form.append('lon',                 usedLon);
@@ -257,12 +272,25 @@ export const IncidentReport = () => {
       form.append('rainfall_mm',         parseFloat(rainfall) || 80);
       form.append('description',         description || `${incidentType} reported by field officer. Road block: ${roadBlock}.`);
       if (photo) form.append('photo', photo);
+      return form;
+    };
 
-      const res = await fetch(`${API_BASE}/api/road-incidents`, {
+    const submitWithToken = (authToken) =>
+      fetch(`${API_BASE}/api/road-incidents`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: form,
+        headers: { Authorization: `Bearer ${authToken}` },
+        body: buildForm(),   // fresh FormData each time
       });
+
+    try {
+      let res = await submitWithToken(token);
+
+      // 401: stale/invalid token — clear it, get a fresh one and retry exactly once
+      if (res.status === 401) {
+        const freshToken = await ensureToken(true);
+        if (!freshToken) throw new Error('Session expired. Please log in again.');
+        res = await submitWithToken(freshToken);
+      }
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Submission failed');
@@ -280,6 +308,7 @@ export const IncidentReport = () => {
       setSubmitting(false);
     }
   };
+
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto', padding: '0 0 50px' }}>
