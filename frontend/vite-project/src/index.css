@@ -903,3 +903,8 @@ tr:hover td { background-color: var(--sky-tint); }
   from { opacity: 0; transform: translateY(-6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(110%); }
+  to   { opacity: 1; transform: translateX(0); }
+}

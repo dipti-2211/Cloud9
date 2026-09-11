@@ -1,9 +1,12 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, MapPin, X, ArrowRight, ShieldAlert, Radio, Clock } from 'lucide-react';
+import {
+  AlertTriangle, MapPin, X, ArrowRight, ShieldAlert,
+  Radio, Clock, Volume2, VolumeX, CheckCircle2, Navigation
+} from 'lucide-react';
 import { useSocket } from '../../hooks/useSocket';
 
-// Play an emergency audio ping via Web Audio API
+// Play an emergency audio alarm via Web Audio API
 const playEmergencyPing = () => {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -15,7 +18,7 @@ const playEmergencyPing = () => {
     const osc1 = ctx.createOscillator();
     const gain1 = ctx.createGain();
     osc1.type = 'sawtooth';
-    osc1.frequency.setValueAtTime(880, now); // A5
+    osc1.frequency.setValueAtTime(880, now);
     osc1.frequency.exponentialRampToValueAtTime(1320, now + 0.12);
     gain1.gain.setValueAtTime(0.3, now);
     gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.18);
@@ -28,7 +31,7 @@ const playEmergencyPing = () => {
     const osc2 = ctx.createOscillator();
     const gain2 = ctx.createGain();
     osc2.type = 'sawtooth';
-    osc2.frequency.setValueAtTime(1174, now + 0.22); // D6
+    osc2.frequency.setValueAtTime(1174, now + 0.22);
     osc2.frequency.exponentialRampToValueAtTime(1760, now + 0.36);
     gain2.gain.setValueAtTime(0.35, now + 0.22);
     gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.42);
@@ -45,9 +48,10 @@ export const IncidentAlertModal = () => {
   const { socket } = useSocket();
   const navigate = useNavigate();
   const [activeAlert, setActiveAlert] = useState(null);
-  const seenIncidentIds = useRef(new Set());
+  const [isPaused, setIsPaused] = useState(false);
+  const timerRef = useRef(null);
 
-  // Request browser notification permission once
+  // Request browser desktop notification permission once on mount
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
@@ -55,27 +59,24 @@ export const IncidentAlertModal = () => {
   }, []);
 
   useEffect(() => {
-    const s = socket.current;
-    if (!s) return;
+    const s = socket?.current || socket;
 
     const handleIncident = (data) => {
       if (!data) return;
       const id = data._id || data.id || `inc-${Date.now()}`;
-      if (seenIncidentIds.current.has(id)) return;
-      seenIncidentIds.current.add(id);
 
       playEmergencyPing();
 
-      const type = (data.incident_type || data.type || 'Hazard').replace(/_/g, ' ').toUpperCase();
-      const road = data.road_name || data.road_segment_id?.road_name || 'NER Corridor';
+      const type = (data.incident_type || data.type || data.title || 'Hazard').replace(/_/g, ' ').toUpperCase();
+      const road = data.road_name || data.road_segment_id?.road_name || data.road || 'NER Corridor';
       const district = data.district || data.road_segment_id?.district || 'North East Region';
-      const blockage = data.road_block || 'partial';
-      const officer = data.field_officer_name || data.reportedBy || 'Field Officer';
+      const blockage = (data.road_block || data.blockage || 'partial').toLowerCase();
+      const officer = data.field_officer_name || data.reportedBy || data.officer || 'Field Officer';
       const slope = data.slope ?? data.slope_deg;
-      const rain = data.rainfall_mm;
-      const description = data.description || `Immediate road hazard reported on ${road}. Proceed with caution or seek detour.`;
-      const lat = data.location?.coordinates?.[1] || data.latitude || 25.5;
-      const lon = data.location?.coordinates?.[0] || data.longitude || 92.5;
+      const rain = data.rainfall_mm ?? data.rainfall;
+      const description = data.description || data.message || `Immediate road hazard reported on ${road}. Proceed with caution or follow detour.`;
+      const lat = data.location?.coordinates?.[1] || data.latitude || data.lat || 25.5;
+      const lon = data.location?.coordinates?.[0] || data.longitude || data.lon || 92.5;
 
       const alertObj = {
         id,
@@ -89,241 +90,232 @@ export const IncidentAlertModal = () => {
         description,
         lat,
         lon,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
 
       setActiveAlert(alertObj);
 
-      // Desktop notification
+      // Desktop system notification
       if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification(`🚨 Emergency Incident: ${type}`, {
-          body: `${road} (${district}) — Blockage: ${blockage.toUpperCase()}`,
-          icon: '/favicon.ico',
-        });
+        try {
+          new Notification(`🚨 Emergency Hazard Alert: ${type}`, {
+            body: `${road} (${district}) — Blockage: ${blockage.toUpperCase()}`,
+            icon: '/favicon.ico',
+          });
+        } catch { /* browser block */ }
       }
     };
 
-    s.on('incident_created', handleIncident);
+    if (s && typeof s.on === 'function') {
+      s.on('incident_created', handleIncident);
+      s.on('alert_created', handleIncident);
+    }
+
+    // Local custom event listener for immediate form submissions or test triggers
+    const onCustomIncident = (e) => {
+      if (e.detail) handleIncident(e.detail);
+    };
+    window.addEventListener('incident_created', onCustomIncident);
+    window.addEventListener('incident_reported', onCustomIncident);
+
     return () => {
-      s.off('incident_created', handleIncident);
+      if (s && typeof s.off === 'function') {
+        s.off('incident_created', handleIncident);
+        s.off('alert_created', handleIncident);
+      }
+      window.removeEventListener('incident_created', onCustomIncident);
+      window.removeEventListener('incident_reported', onCustomIncident);
     };
   }, [socket]);
 
+  // Auto-dismiss after 14 seconds unless hovered
+  useEffect(() => {
+    if (!activeAlert) return;
+    if (isPaused) {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      return;
+    }
+
+    timerRef.current = setTimeout(() => {
+      setActiveAlert(null);
+    }, 14000);
+
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [activeAlert, isPaused]);
+
   if (!activeAlert) return null;
 
-  const isFullBlockage = activeAlert.blockage === 'full';
+  const isFullBlock = activeAlert.blockage === 'full';
 
   return (
     <div
       style={{
         position: 'fixed',
-        inset: 0,
-        zIndex: 99999,
-        background: 'rgba(15, 23, 42, 0.75)',
-        backdropFilter: 'blur(6px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '20px',
-        animation: 'popoverFadeIn 0.2s ease',
+        top: 20,
+        right: 20,
+        zIndex: 999999,
+        width: 'calc(100vw - 40px)',
+        maxWidth: 440,
+        pointerEvents: 'auto',
+        animation: 'slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
-      onClick={() => setActiveAlert(null)}
+      onMouseEnter={() => setIsPaused(true)}
+      onMouseLeave={() => setIsPaused(false)}
     >
       <div
         style={{
-          background: 'var(--white, #ffffff)',
-          borderRadius: 18,
-          boxShadow: '0 25px 70px rgba(220, 38, 38, 0.35), 0 10px 30px rgba(0,0,0,0.25)',
+          background: 'var(--surface, #ffffff)',
+          borderRadius: 14,
+          boxShadow: '0 16px 40px rgba(220, 38, 38, 0.35), 0 6px 16px rgba(0, 0, 0, 0.15)',
           border: '2px solid #ef4444',
-          maxWidth: 520,
-          width: '100%',
           overflow: 'hidden',
-          animation: 'scaleUp 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+          display: 'flex',
+          flexDirection: 'column',
         }}
-        onClick={(e) => e.stopPropagation()}
       >
-        {/* Urgent Pulsing Banner Header */}
+        {/* Urgent Header Banner */}
         <div
           style={{
             background: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
-            padding: '20px 24px',
-            color: '#fff',
-            position: 'relative',
+            padding: '10px 14px',
+            color: '#ffffff',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  padding: '3px 9px',
-                  borderRadius: 20,
-                  background: 'rgba(255,255,255,0.22)',
-                  fontSize: '0.72rem',
-                  fontWeight: 800,
-                  letterSpacing: '0.06em',
-                  textTransform: 'uppercase',
-                }}
-              >
-                <Radio size={12} className="spin" /> Real-Time Live Alert
-              </span>
-              <span style={{ fontSize: '0.72rem', opacity: 0.85, display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Clock size={11} /> {activeAlert.time}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: '50%',
+                background: '#ffffff',
+                boxShadow: '0 0 8px #ffffff',
+                display: 'inline-block',
+                animation: 'pulse-danger 1.5s infinite',
+              }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Radio size={13} className="spin" />
+              <span style={{ fontSize: '0.74rem', fontWeight: 900, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                LIVE HAZARD ALERT
               </span>
             </div>
-
-            <button
-              onClick={() => setActiveAlert(null)}
-              style={{
-                background: 'rgba(255,255,255,0.2)',
-                border: 'none',
-                borderRadius: '50%',
-                width: 28,
-                height: 28,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#fff',
-              }}
-            >
-              <X size={15} />
-            </button>
+            <span style={{ fontSize: '0.7rem', opacity: 0.85, display: 'flex', alignItems: 'center', gap: 3, marginLeft: 4 }}>
+              <Clock size={10} /> {activeAlert.time}
+            </span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
-            <div
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: '50%',
-                background: 'rgba(255,255,255,0.2)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}
-            >
-              <AlertTriangle size={24} color="#fef08a" />
-            </div>
-            <div>
-              <div style={{ fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.9, fontWeight: 700 }}>
-                Incident Reported
-              </div>
-              <div style={{ fontSize: '1.35rem', fontWeight: 900, lineHeight: 1.2 }}>
-                {activeAlert.type}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Modal Body */}
-        <div style={{ padding: '22px 24px' }}>
-          {/* Location & Blockage Highlight */}
-          <div
+          <button
+            onClick={() => setActiveAlert(null)}
             style={{
-              padding: '12px 14px',
-              borderRadius: 10,
-              background: '#fef2f2',
-              border: '1px solid #fecaca',
-              marginBottom: 16,
+              background: 'rgba(255, 255, 255, 0.2)',
+              border: 'none',
+              borderRadius: '50%',
+              width: 24,
+              height: 24,
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              color: '#ffffff',
+              transition: 'background 0.15s',
             }}
+            title="Dismiss Alert"
           >
+            <X size={14} />
+          </button>
+        </div>
+
+        {/* Content Body */}
+        <div style={{ padding: '14px 16px' }}>
+          {/* Headline & Blockage Badge */}
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
             <div>
-              <div style={{ fontSize: '0.72rem', color: '#991b1b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Corridor Location
+              <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--ink, #0f172a)', lineHeight: 1.25 }}>
+                {activeAlert.type}
               </div>
-              <div style={{ fontWeight: 800, fontSize: '1rem', color: '#1e293b', marginTop: 2 }}>
-                {activeAlert.road}
-              </div>
-              <div style={{ fontSize: '0.76rem', color: '#64748b' }}>
-                {activeAlert.district}
+              <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#dc2626', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <MapPin size={13} />
+                <span>{activeAlert.road}</span>
+                <span style={{ color: 'var(--text-secondary, #64748b)', fontWeight: 500 }}>· {activeAlert.district}</span>
               </div>
             </div>
 
             <span
               style={{
-                fontSize: '0.74rem',
+                fontSize: '0.68rem',
                 fontWeight: 800,
-                padding: '4px 10px',
-                borderRadius: 8,
-                background: isFullBlockage ? '#ef4444' : '#f97316',
-                color: '#fff',
+                padding: '3px 8px',
+                borderRadius: 6,
+                background: isFullBlock ? '#fee2e2' : '#fef3c7',
+                color: isFullBlock ? '#b91c1c' : '#b45309',
+                border: `1px solid ${isFullBlock ? '#f87171' : '#f59e0b'}`,
+                whiteSpace: 'nowrap',
                 textTransform: 'uppercase',
-                letterSpacing: '0.04em',
-                boxShadow: '0 2px 6px rgba(239,68,68,0.3)',
               }}
             >
-              {isFullBlockage ? 'Road Blocked' : `${activeAlert.blockage} Block`}
+              {isFullBlock ? '⛔ Road Blocked' : '⚠️ Partial Block'}
             </span>
           </div>
 
           {/* Description */}
-          <p style={{ fontSize: '0.88rem', color: '#334155', lineHeight: 1.55, margin: '0 0 16px' }}>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary, #475569)', lineHeight: 1.45, marginTop: 8 }}>
             {activeAlert.description}
-          </p>
+          </div>
 
-          {/* Geotechnical metrics & Officer info */}
+          {/* Geotechnical Quick Badges */}
           <div
             style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 10,
-              marginBottom: 20,
-              padding: '12px 14px',
-              borderRadius: 10,
-              background: 'var(--surface, #f8fafc)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              marginTop: 10,
+              padding: '6px 10px',
+              borderRadius: 8,
+              background: 'var(--surface-elevated, #f8fafc)',
               border: '1px solid var(--line, #e2e8f0)',
+              fontSize: '0.72rem',
+              color: 'var(--text-secondary, #64748b)',
             }}
           >
-            <div>
-              <div style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Reporter</div>
-              <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0f172a', marginTop: 2 }}>
-                {activeAlert.officer}
-              </div>
-            </div>
-
-            <div>
-              <div style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase' }}>Hazard Metrics</div>
-              <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#b91c1c', marginTop: 2 }}>
-                {activeAlert.slope != null ? `Slope: ${activeAlert.slope}°` : ''}
-                {activeAlert.slope != null && activeAlert.rain != null ? ' · ' : ''}
-                {activeAlert.rain != null ? `Rain: ${activeAlert.rain}mm` : ''}
-                {activeAlert.slope == null && activeAlert.rain == null && 'High Hazard Risk'}
-              </div>
-            </div>
+            {activeAlert.slope != null && (
+              <span>🏔 Slope: <strong style={{ color: 'var(--ink, #0f172a)' }}>{activeAlert.slope}°</strong></span>
+            )}
+            {activeAlert.rain != null && (
+              <span>🌧 Rain: <strong style={{ color: 'var(--ink, #0f172a)' }}>{activeAlert.rain}mm</strong></span>
+            )}
+            <span>👤 Officer: <strong style={{ color: 'var(--ink, #0f172a)' }}>{activeAlert.officer}</strong></span>
           </div>
 
           {/* Action Buttons */}
-          <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
             <button
               onClick={() => {
                 setActiveAlert(null);
-                navigate('/route-planner');
+                navigate('/dashboard');
               }}
               style={{
                 flex: 1,
-                padding: '10px 14px',
+                padding: '8px 12px',
                 borderRadius: 8,
-                background: 'linear-gradient(135deg, #0284c7, #0ea5e9)',
-                color: '#fff',
+                background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                color: '#ffffff',
                 border: 'none',
                 fontWeight: 700,
-                fontSize: '0.84rem',
+                fontSize: '0.8rem',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: 6,
-                boxShadow: '0 4px 12px rgba(14,165,233,0.35)',
+                gap: 5,
+                boxShadow: '0 2px 6px rgba(37,99,235,0.3)',
               }}
             >
-              <MapPin size={15} /> View on Map
+              <MapPin size={13} /> View on Map
             </button>
 
             <button
@@ -333,23 +325,35 @@ export const IncidentAlertModal = () => {
               }}
               style={{
                 flex: 1,
-                padding: '10px 14px',
+                padding: '8px 12px',
                 borderRadius: 8,
-                background: '#f1f5f9',
-                color: '#0f172a',
-                border: '1px solid #cbd5e1',
+                background: 'var(--surface-elevated, #f1f5f9)',
+                color: 'var(--ink, #0f172a)',
+                border: '1px solid var(--line, #cbd5e1)',
                 fontWeight: 700,
-                fontSize: '0.84rem',
+                fontSize: '0.8rem',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: 6,
+                gap: 5,
               }}
             >
-              Incident List <ArrowRight size={14} />
+              Incident List <ArrowRight size={13} />
             </button>
           </div>
+        </div>
+
+        {/* Auto-Dismiss Progress Bar */}
+        <div style={{ height: 3, width: '100%', background: '#fee2e2' }}>
+          <div
+            style={{
+              height: '100%',
+              background: '#ef4444',
+              width: isPaused ? '100%' : '0%',
+              transition: isPaused ? 'none' : 'width 14s linear',
+            }}
+          />
         </div>
       </div>
     </div>

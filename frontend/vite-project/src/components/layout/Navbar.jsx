@@ -134,14 +134,14 @@ export const Navbar = () => {
     load();
     const id = setInterval(load, 30000);
 
-    const s = socket.current;
-    if (s) {
+    const s = socket?.current || socket;
+    if (s && typeof s.on === 'function') {
       s.on('alert_created', load);
       s.on('incident_created', load);
     }
     return () => {
       clearInterval(id);
-      if (s) {
+      if (s && typeof s.off === 'function') {
         s.off('alert_created', load);
         s.off('incident_created', load);
       }
@@ -169,7 +169,39 @@ export const Navbar = () => {
         <h2 style={{ fontSize:'1rem', fontWeight:700, color:'var(--ink)' }}>Command Center</h2>
       </div>
 
-      <div style={{ display:'flex', alignItems:'center', gap:'20px' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:'16px' }}>
+        {/* Quick Test Alert trigger for demo */}
+        <button
+          type="button"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('incident_created', {
+              detail: {
+                id: `demo-${Date.now()}`,
+                incident_type: 'Landslide',
+                road_name: 'NH-2 (Senapati District)',
+                district: 'Senapati',
+                road_block: 'full',
+                field_officer_name: 'Inspector Vikram Singh',
+                slope: 34,
+                rainfall_mm: 125,
+                description: 'Active slope failure observed at km 114. Boulders & heavy debris blocking both lanes. Dynamic reroute active.',
+                location: { coordinates: [94.024, 25.265] },
+              },
+            }));
+          }}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: '5px',
+            padding: '4px 10px', borderRadius: '7px',
+            background: 'rgba(239, 68, 68, 0.1)', color: '#dc2626',
+            border: '1px solid rgba(239, 68, 68, 0.35)',
+            fontWeight: 700, fontSize: '0.74rem', cursor: 'pointer',
+            transition: 'all 0.15s ease',
+          }}
+          title="Trigger Demo Hazard Alert Notification"
+        >
+          <span>🚨</span> Test Alert
+        </button>
+
         {/* SYSTEM OPERATIONAL */}
         <div style={{ display:'flex', alignItems:'center', gap:'6px', color:'var(--success)', fontSize:'0.78rem', fontWeight:700 }}>
           <Activity size={13} />

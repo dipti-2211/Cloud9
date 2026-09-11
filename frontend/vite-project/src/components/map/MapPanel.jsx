@@ -3,9 +3,9 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, Tooltip, CircleMarker
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import toast from 'react-hot-toast';
-import { vehicles as initialVehicles, incidents } from '../../data/mockData';
+import { vehicles as initialVehicles, incidents, DEMO_REROUTE_TRUCKS } from '../../data/mockData';
 import { Badge } from '../common/Badge';
-import { getLandslideRisk, vehiclesAPI } from '../../services/api';
+import { getLandslideRisk, vehiclesAPI, auth } from '../../services/api';
 import demoLocations from '../../data/demoLocations.json';
 import { useSocket } from '../../hooks/useSocket';
 import { NER_ROAD_SEGMENTS } from './RiskPolyline';
@@ -28,6 +28,34 @@ const RISK_TEXT  = { high: '#ef4444',      medium: '#b45309',   low: '#15803d' }
 // Marker icons (unchanged from original)
 // ---------------------------------------------------------------------------
 const vehicleIcon  = L.divIcon({ className: 'vehicle-marker',  iconSize: [14, 14], iconAnchor: [7, 7] });
+
+// Admin-only Blue Dot truck marker with radar pulse ring
+const adminBlueDotIcon = L.divIcon({
+  className: '',
+  iconSize: [26, 26],
+  iconAnchor: [13, 13],
+  html: `<div style="
+    position: relative;
+    width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
+  ">
+    <div style="
+      position: absolute;
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      background: rgba(37, 99, 235, 0.45);
+      animation: pulse-danger 1.8s infinite;
+    "></div>
+    <div style="
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: #2563eb;
+      border: 2.5px solid #ffffff;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+    "></div>
+  </div>`,
+});
+
 const incidentIcon = L.divIcon({ className: 'incident-marker', iconSize: [16, 16], iconAnchor: [8, 8] });
 const userLocationIcon = L.divIcon({ className: 'user-location-marker', iconSize: [20, 20], iconAnchor: [10, 10] });
 const demoPinHigh = L.divIcon({ className: 'demo-pin demo-pin-high', iconSize: [22, 22], iconAnchor: [11, 22] });
@@ -125,6 +153,8 @@ function vehicleLeafletPos(v) {
 // ---------------------------------------------------------------------------
 export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
   const { socket } = useSocket();
+  const currentUser = auth.getUser();
+  const isAdmin = currentUser?.role === 'ADMIN';
   const [liveVehicles, setLiveVehicles] = useState(initialVehicles);
   const [roadSegments, setRoadSegments] = useState(NER_ROAD_SEGMENTS);  // updated live via socket
   const [liveIncidents, setLiveIncidents] = useState([]);               // field-reported incidents
@@ -244,12 +274,36 @@ export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
   };
 
   return (
-    <MapContainer
-      center={[25.165, 93.017]}  // Dima Hasao / Haflong — the highest-risk NER hub
-      zoom={9}                    // zoomed in to show Haflong road network clearly
-      zoomControl={false}
-      style={{ height: '100%', width: '100%' }}
-    >
+    <div style={{ position: 'relative', height: '100%', width: '100%' }}>
+      {/* Admin Fleet Live View Floating Badge — positioned top-left to avoid collision with Plan a Route CTA (top-right) */}
+      {isAdmin && (
+        <div style={{
+          position: 'absolute', top: 12, left: 12, zIndex: 1000,
+          background: 'rgba(15, 23, 42, 0.88)', backdropFilter: 'blur(6px)',
+          color: '#ffffff', padding: '7px 13px', borderRadius: 8,
+          fontSize: '0.76rem', boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
+          border: '1px solid rgba(59, 130, 246, 0.45)',
+          display: 'flex', alignItems: 'center', gap: 9, pointerEvents: 'none',
+        }}>
+          <span style={{
+            width: 9, height: 9, borderRadius: '50%', background: '#3b82f6',
+            boxShadow: '0 0 8px #3b82f6', display: 'inline-block'
+          }}></span>
+          <div>
+            <div style={{ fontWeight: 700, color: '#93c5fd' }}>Admin Fleet Live Tracking</div>
+            <div style={{ fontSize: '0.7rem', color: '#cbd5e1', marginTop: 1 }}>
+              Blue Dots: Trucks · <span style={{ color: '#f87171' }}>Red: Blocked</span> · <span style={{ color: '#4ade80' }}>Green: Safe Detour</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <MapContainer
+        center={[25.165, 93.017]}  // Dima Hasao / Haflong — the highest-risk NER hub
+        zoom={9}                    // zoomed in to show Haflong road network clearly
+        zoomControl={false}
+        style={{ height: '100%', width: '100%' }}
+      >
       {/* Dark-friendly Stadia smooth tiles */}
       <TileLayer
         url="https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png"
@@ -399,12 +453,12 @@ export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
         />
       )}
 
-      {/* ── Live vehicle markers ── */}
+      {/* ── Live vehicle markers (Blue Dots for Admin, Standard for others) ── */}
       {liveVehicles.map((v) => {
         const pos = vehicleLeafletPos(v);
         if (!pos) return null;
         return (
-          <Marker key={v.id || v._id} position={pos} icon={vehicleIcon}>
+          <Marker key={v.id || v._id} position={pos} icon={isAdmin ? adminBlueDotIcon : vehicleIcon}>
             <Popup>
               <div style={{ padding: '4px' }}>
                 <div style={{ fontWeight: 600, fontSize: '1rem' }}>{v.id || v.vehicleNumber}</div>
@@ -419,6 +473,70 @@ export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
           </Marker>
         );
       })}
+
+      {/* ── Admin-only Fleet Monitoring: 3 Demo Trucks with Critical Road Reroutes ── */}
+      {isAdmin && DEMO_REROUTE_TRUCKS.map((truck) => (
+        <span key={`demo-truck-${truck.id}`}>
+          {/* Red line: original planned path passing through critical road */}
+          <Polyline
+            positions={truck.originalRoute}
+            pathOptions={{ color: '#ef4444', weight: 5, opacity: 0.85, dashArray: '8, 8' }}
+          >
+            <Tooltip sticky>
+              <strong style={{ color: '#dc2626' }}>⛔ {truck.id} — Critical Road Blocked</strong>
+              <br />{truck.criticalRoad}
+            </Tooltip>
+          </Polyline>
+
+          {/* Green line: safe rerouted corridor */}
+          <Polyline
+            positions={truck.reroutedRoute}
+            pathOptions={{ color: '#10b981', weight: 6, opacity: 0.95 }}
+          >
+            <Tooltip sticky>
+              <strong style={{ color: '#059669' }}>🟢 {truck.id} — Safe Detour Route</strong>
+              <br />{truck.rerouteReason}
+            </Tooltip>
+          </Polyline>
+
+          {/* Blue Dot marker at current truck position */}
+          <Marker position={truck.position} icon={adminBlueDotIcon}>
+            <Popup>
+              <div style={{ padding: '4px', minWidth: 220 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ fontWeight: 800, fontSize: '0.95rem' }}>{truck.id}</span>
+                  <span style={{
+                    fontSize: '0.7rem', fontWeight: 700, padding: '2px 6px',
+                    borderRadius: 4, background: '#fee2e2', color: '#b91c1c', border: '1px solid #f87171'
+                  }}>
+                    REROUTED
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 3 }}>
+                  Driver: <strong>{truck.driver}</strong> · {truck.cargo}
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                  {truck.source} ➜ {truck.destination}
+                </div>
+                <div style={{
+                  marginTop: 6, padding: '5px 8px', borderRadius: 4,
+                  background: '#fef2f2', borderLeft: '3px solid #ef4444',
+                  fontSize: '0.74rem', color: '#991b1b',
+                }}>
+                  ⛔ <strong>Blocked:</strong> {truck.criticalRoad}
+                </div>
+                <div style={{
+                  marginTop: 4, padding: '5px 8px', borderRadius: 4,
+                  background: '#f0fdf4', borderLeft: '3px solid #10b981',
+                  fontSize: '0.74rem', color: '#166534',
+                }}>
+                  🟢 <strong>Detour:</strong> {truck.rerouteReason} (+{truck.delayMinutes}m)
+                </div>
+              </div>
+            </Popup>
+          </Marker>
+        </span>
+      ))}
 
       {/* ── Mock incident markers ── */}
       {incidents.map((inc) => (
@@ -580,6 +698,7 @@ export const MapPanel = ({ userCoords = null, activeRoute = null }) => {
           </Marker>
         );
       })}
-    </MapContainer>
+      </MapContainer>
+    </div>
   );
 };

@@ -3,17 +3,25 @@ import { vehiclesAPI } from '../services/api';
 import { Badge } from '../components/common/Badge';
 import { PageHeader } from '../components/common/PageHeader';
 import { VehicleLiveModal } from '../components/vehicles/VehicleLiveModal';
-import { ShieldAlert, RefreshCw, Clock } from 'lucide-react';
+import { VehicleMapModal } from '../components/vehicles/VehicleMapModal';
+import { DEMO_REROUTE_TRUCKS } from '../data/mockData';
+import { ShieldAlert, RefreshCw, Clock, MapPin } from 'lucide-react';
 
 export const Vehicles = () => {
   const [vehicles,    setVehicles]    = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [error,       setError]       = useState('');
   const [liveVehicle, setLiveVehicle] = useState(null);
+  const [mapVehicle,  setMapVehicle]  = useState(null);
 
   const load = async () => {
     setLoading(true); setError('');
-    try   { setVehicles(await vehiclesAPI.getAll()); }
+    try {
+      const data = await vehiclesAPI.getAll();
+      const existingIds = new Set((data || []).map(v => v.id || v.vehicleNumber || v.registrationNumber));
+      const demoToAdd = DEMO_REROUTE_TRUCKS.filter(d => !existingIds.has(d.id));
+      setVehicles([...(data || []), ...demoToAdd]);
+    }
     catch (e) { setError(e.message); }
     finally   { setLoading(false); }
   };
@@ -54,7 +62,7 @@ export const Vehicles = () => {
                   <th>Status</th>
                   <th>Destination</th>
                   <th>ETA</th>
-                  <th>Action</th>
+                  <th style={{ minWidth: 190 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -76,7 +84,24 @@ export const Vehicles = () => {
                     </td>
                     <td><Badge>{v.priority ?? '—'}</Badge></td>
                     <td>
-                      {v.status === 'DELAYED' ? (
+                      {v.status === 'REROUTED' ? (
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '3px 8px',
+                          borderRadius: 6,
+                          background: 'rgba(239, 68, 68, 0.12)',
+                          color: '#dc2626',
+                          border: '1px solid rgba(239, 68, 68, 0.35)',
+                          fontWeight: 700,
+                          fontSize: '0.74rem',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          <ShieldAlert size={11} />
+                          REROUTED (+{v.delayMinutes || 45}m)
+                        </span>
+                      ) : v.status === 'DELAYED' ? (
                         <span style={{
                           display: 'inline-flex',
                           alignItems: 'center',
@@ -104,6 +129,11 @@ export const Vehicles = () => {
                           ⚠ {v.delayReason}
                         </div>
                       )}
+                      {v.criticalRoad && (
+                        <div style={{ fontSize: '0.7rem', color: '#dc2626', marginTop: 2 }}>
+                          ⛔ {v.criticalRoad}
+                        </div>
+                      )}
                     </td>
                     <td style={{
                       color: v.priority === 'CRITICAL' ? 'var(--danger)' : 'inherit',
@@ -112,11 +142,33 @@ export const Vehicles = () => {
                       {v.id === 'VAN-104' ? '4h 10m (+45m Detour Delay)' : (v.eta ?? '—')}
                     </td>
                     <td>
-                      <button className="btn btn-secondary"
-                        style={{ padding:'6px 12px', fontSize:'0.8rem' }}
-                        onClick={() => setLiveVehicle(v)}>
-                        View Live
-                      </button>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <button
+                          className="btn btn-primary"
+                          style={{
+                            padding: '5px 10px',
+                            fontSize: '0.78rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                            color: '#fff',
+                            whiteSpace: 'nowrap',
+                          }}
+                          onClick={() => setMapVehicle(v)}
+                          title="View on Map"
+                        >
+                          <MapPin size={13} /> View on Map
+                        </button>
+                        <button
+                          className="btn btn-secondary"
+                          style={{ padding: '5px 10px', fontSize: '0.78rem', whiteSpace: 'nowrap' }}
+                          onClick={() => setLiveVehicle(v)}
+                          title="View Live Details"
+                        >
+                          View Live
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -128,6 +180,10 @@ export const Vehicles = () => {
 
       {liveVehicle && (
         <VehicleLiveModal vehicle={liveVehicle} onClose={() => setLiveVehicle(null)} />
+      )}
+
+      {mapVehicle && (
+        <VehicleMapModal vehicle={mapVehicle} onClose={() => setMapVehicle(null)} />
       )}
     </div>
   );

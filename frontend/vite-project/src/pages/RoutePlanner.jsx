@@ -27,6 +27,7 @@ import { useSocket } from '../hooks/useSocket';
 import { PageHeader } from '../components/common/PageHeader';
 import rawDemoLocations from '../data/demoLocations.json';
 import { RiskPolyline, getRouteCrossedSegments, NER_ROAD_SEGMENTS } from '../components/map/RiskPolyline';
+import { NavAlertModal } from '../components/map/NavAlertModal';
 
 // ---------------------------------------------------------------------------
 // Real demo locations from the trained model — sourced from landslide_points.csv
@@ -556,6 +557,10 @@ export const RoutePlanner = () => {
   const [navSteps,      setNavSteps     ] = useState([]);   // parsed step objects
   const [navRoute,      setNavRoute     ] = useState(null); // [lat,lon][] of selected route
 
+  // Pre-trip Navigation Alert Modal state (EN / HI / BN)
+  const [showNavAlert,  setShowNavAlert ] = useState(false);
+  const [navAlertLang,  setNavAlertLang ] = useState('en');
+
   // Vehicle position along route (Google Maps-style moving marker)
   const [vehicleRouteIdx, setVehicleRouteIdx] = useState(0);  // index into navRoute
   const [vehicleBearing,  setVehicleBearing ] = useState(0);  // direction in degrees
@@ -967,6 +972,12 @@ export const RoutePlanner = () => {
   // ---- Start / Stop navigation ----
   const startNavigation = () => {
     if (selectedIdx == null) return;
+    setShowNavAlert(true);
+  };
+
+  const confirmNavigation = () => {
+    setShowNavAlert(false);
+    if (selectedIdx == null || !routes[selectedIdx]) return;
     setNavSteps(routes[selectedIdx].steps);
     setNavRoute(routes[selectedIdx].coords);
     setCurrentStep(0);
@@ -1947,6 +1958,26 @@ export const RoutePlanner = () => {
           </div>
         </div>
       </div>
+
+      {/* ── Pre-Trip Navigation Safety Alert Modal (EN / HI / BN) ── */}
+      {showNavAlert && selectedIdx != null && routes[selectedIdx] && (
+        <NavAlertModal
+          route={routes[selectedIdx]}
+          crossedSegments={crossedSegments}
+          highSegments={highSegments}
+          medSegments={medSegments}
+          fromName={fromPlace?.display_name?.split(',')[0] || 'Current Location'}
+          toName={toPlace?.display_name?.split(',')[0] || 'Destination'}
+          saferAlt={saferAlt}
+          lang={navAlertLang}
+          onLangChange={(l) => setNavAlertLang(l)}
+          onProceed={confirmNavigation}
+          onCancel={() => setShowNavAlert(false)}
+          onSwitchSafer={() => {
+            selectRoute(0);
+          }}
+        />
+      )}
     </div>
   );
 };

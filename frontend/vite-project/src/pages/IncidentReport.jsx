@@ -298,6 +298,20 @@ export const IncidentReport = () => {
       setResult(data);
       toast.success('Incident reported! Live maps & reroutes triggered.', { duration: 6000, icon: '🚨' });
 
+      // Trigger the global IncidentAlertModal pop-up message immediately
+      const incPayload = data.incident || data.data || {
+        incident_type: incidentType,
+        road_name: detectedRoad?.name || 'NER Corridor',
+        district: detectedRoad?.district || 'North East Region',
+        road_block: roadBlock,
+        field_officer_name: 'Field Officer',
+        slope: parseFloat(slope) || 20,
+        rainfall_mm: parseFloat(rainfall) || 80,
+        description: description || `${incidentType} reported by field officer. Road block: ${roadBlock}.`,
+        location: { coordinates: [usedLon, usedLat] },
+      };
+      window.dispatchEvent(new CustomEvent('incident_created', { detail: incPayload }));
+
       // Reset photo & notes, keep coordinates
       setPhoto(null);
       setPreview(null);

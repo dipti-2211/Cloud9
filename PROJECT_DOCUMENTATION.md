@@ -434,6 +434,19 @@ App Navigation Tree:
   - **Vehicle Markers:** Animated position markers displaying current location, vehicle plate, assigned driver, and cargo type.
   - **Interactive Popups:** Clicking any road segment displays segment length, district, current risk score percentage, slope gradient, and isolated settlements.
   - **Point-and-Click Risk Query:** Clicking any coordinate on the map queries `/api/landslide/risk?lat={lat}&lon={lon}` and opens an inspection popup showing exact slope, elevation, rainfall, and landslide percentage.
+  - **Admin-Exclusive Live Fleet Monitoring (Blue Dot Trucks):** When an authenticated user with `ADMIN` role views the map:
+    - All active fleet trucks are displayed as prominent **Blue Dot** markers with dual concentric pulsing radar rings (`adminBlueDotIcon`).
+    - An overlay banner (*"Admin Fleet Live Tracking"*) appears in the upper right quadrant.
+    - Regular users and field officers see standard map views without admin fleet detour overlays.
+  - **Dynamic Rerouting Visualization (3 Demo Trucks):**
+    - The admin map visualizes 3 live reroute scenarios demonstrating automated detour handling:
+      - **TRUCK-D01 (Guwahati ➔ Imphal):** Blocked on NH-2 at km 114 (landslide debris).
+      - **TRUCK-D02 (Dibrugarh ➔ Haflong):** Blocked on SH-5 (Haflong–Dima Hasao escarpment risk).
+      - **TRUCK-D03 (Siliguri ➔ Gangtok):** Blocked on NH-10 (high rainfall rockfall hazard).
+    - **Color-Coded Polylines:**
+      - **Red Polyline (`#ef4444`, dashed):** Represents the original planned path passing through the critical / blocked road segment.
+      - **Green Polyline (`#10b981`, solid):** Represents the dynamically calculated safe detour bypassing the hazardous corridor.
+    - Clicking any truck marker opens an inspection popup displaying driver, cargo, delay penalty, blocked hazard reason, and the safe alternative corridor.
 
 ---
 
@@ -453,6 +466,21 @@ App Navigation Tree:
     - Worst-Case Landslide Risk Category (`worstCategory`).
     - Composite Hazard Score (`score`).
   - **Hazard Hotspot Badges:** Red pulsing circle badges (`riskHazardIcon`) rendered directly over high-risk points on the route polyline.
+  - **Pre-Navigation Safety Advisory & Route Risk Alert Modal (`NavAlertModal`):**
+    - Clicking **"Start Navigation"** pauses trip execution and displays an urgent pre-trip advisory popup before navigation commences.
+    - **Trilingual Language Selector:** Seamlessly toggles all advisory text across three languages:
+      - 🇬🇧 **English (`en`)**
+      - 🇮🇳 **Hindi (`hi` — हिन्दी)**
+      - 🇮🇳 **Bengali (`bn` — বাংলা)**
+    - **Comprehensive Route & Hazard Breakdown:**
+      - Origin and destination with distance (km) and estimated travel time.
+      - Overall route hazard index percentage with color badges (`HIGH RISK`, `CAUTION`, `CLEAR`).
+      - Contextual landslide risk statement warning of steep mountain slopes, heavy rainfall, and potential rockfalls.
+      - Detailed list of crossed NER road corridors showing road name, terminal nodes, district, slope in degrees, 7-day cumulative rainfall in mm, and specific geological hazard notes.
+    - **Tri-Action Decision Controls:**
+      - **Proceed with Navigation (Green button):** Confirms risk acknowledgment and initiates turn-by-turn navigation HUD.
+      - **Cancel / Re-plan (Neutral button):** Dismisses modal to allow selecting a different destination or route.
+      - **Switch to Safer Alternative Route (Emerald button):** Immediately switches to the safest alternative route when available.
   - **Turn-by-Turn Driving HUD:** Full-screen driving mode with distance countdowns, upcoming maneuver icons (turn left, turn right, keep straight), and voice/visual cues.
   - **Automated GPS Off-Route Detection & Rerouting:** Subscribes to hardware GPS via `navigator.geolocation.watchPosition`. If the vehicle deviates $> 80\text{ meters}$ from the active polyline across 3 consecutive GPS updates, the system automatically recalculates the route from the current vehicle location to the destination.
 
@@ -481,10 +509,10 @@ App Navigation Tree:
 ---
 
 ### 5.6 Field Officer Incident Reporting & Geo-Tagging (`/incident-report`)
-- **Route:** `/incident-report` (Protected: `ADMIN` and `FIELD_OFFICER` roles only).
+- **Route:** `/incident-report` (Protected: `ADMIN` and `FIELD_OFFICER` roles only; **`VEHICLE_OPERATOR` strictly prohibited** via `RoleRoute` redirecting to `/dashboard`).
 - **File:** `frontend/vite-project/src/pages/IncidentReport.jsx`
 - **Backend Endpoints:** `POST /api/road-incidents`, `POST /api/analyze-photo`, `GET /api/geocode/reverse`.
-- **Purpose:** Specialized mobile-friendly hazard reporting tool for field officers inspecting mountain corridors.
+- **Purpose:** Specialized mobile-friendly hazard reporting tool for field officers inspecting mountain corridors. Logistics operators are restricted from submitting incident reports to maintain data integrity and verified officer chain-of-custody.
 - **Key Features & Mechanics:**
   - **Hardware GPS Auto Geo-Tagging:** Automatically queries `useUserLocation()` to retrieve precise device coordinates and reverse-geocodes them into human-readable corridor names.
   - **Field Photo Attachment & Preview:** Captures physical camera photos or file uploads.
@@ -521,9 +549,16 @@ App Navigation Tree:
 - **Backend Endpoints:** `GET /api/vehicles`, `POST /api/vehicles`, `PATCH /api/vehicles/:id`.
 - **Purpose:** Real-time fleet command management overseeing relief trucks, vans, and emergency ambulances.
 - **Key Features & Mechanics:**
-  - **Fleet Roster Table:** Displays Vehicle Number, Type, Cargo, Priority, Driver Name, Source, Destination, and Operational Status (`IN_TRANSIT`, `IDLE`, `DELAYED`, `DELIVERED`).
-  - **VehicleLiveModal (Full-Screen Live Tracking):**
-    - High-performance Leaflet modal displaying the active vehicle position marker and route polyline.
+  - **Fleet Roster Table:** Displays Vehicle Number, Type, Cargo, Priority, Driver Name, Source, Destination, and Operational Status (`IN_TRANSIT`, `IDLE`, `DELAYED`, `REROUTED`, `DELIVERED`).
+  - **Dual Operational Inspection Actions:**
+    - **"View on Map" Button (`VehicleMapModal`):**
+      - Opens an expansive, dedicated GIS modal focused on the selected vehicle and its full route network.
+      - Displays the vehicle's position as a vibrant **Blue Dot** with animated radar pulse.
+      - Renders all regional NER road corridors with live risk-weighted colors (Red = High Risk, Amber = Caution, Green = Clear).
+      - Renders origin (emerald teardrop) and destination (blue teardrop) pins.
+      - For rerouted vehicles (`TRUCK-D01`, `TRUCK-D02`, `TRUCK-D03`), displays the **original blocked path in red dashed lines** and the **safe detour in green solid lines**, accompanied by a top alert banner detailing the obstruction and detour rationale.
+    - **"View Live" Button (`VehicleLiveModal`):**
+      - Displays live vehicle telemetry, sensors, and corridor proximity risk analysis.
     - **Clean Teardrop Start/End Markers:**
       - Origin: Emerald green teardrop (`startIcon`) showing `vehicle.source`.
       - Destination: Electric blue teardrop (`endIcon`) showing `vehicle.destination`.
