@@ -980,8 +980,12 @@ export const RoutePlanner = () => {
       setNavRoute(scored[0].coords);
       setNavSteps(scored[0].steps);
       setRiskSegments(scored[0].highRiskPoints ?? []);
+      return scored;
 
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      setError(e.message);
+      return null;
+    }
     finally { setRouteLoading(false); }
   };
 
@@ -989,6 +993,18 @@ export const RoutePlanner = () => {
   const startNavigation = () => {
     if (selectedIdx == null) return;
     setShowNavAlert(true);
+  };
+
+  // Directly start navigation on user's entered route (auto-fetches if not already scored)
+  const handleDirectStartNavigation = async () => {
+    if (routes.length > 0 && selectedIdx != null) {
+      startNavigation();
+      return;
+    }
+    const scored = await handleFindRoutes();
+    if (scored && scored.length > 0) {
+      setShowNavAlert(true);
+    }
   };
 
   const confirmNavigation = () => {
@@ -1025,6 +1041,7 @@ export const RoutePlanner = () => {
     setSimulationActive(false);
     setSimStage(null);
     setSimBlockedPath(null);
+    setPanelOpen(true); // Re-open route panel when navigation ends
   };
 
   // ── In-Route Landslide & Dynamic Re-Route Simulation Handlers ───────────────
@@ -1225,6 +1242,58 @@ export const RoutePlanner = () => {
       toast.success('✅ Dynamic Re-route Applied: Diverted via NH-27 Safe Bypass (+5.4 km, +8 min) — 100% Hazard Avoided!', {
         duration: 8000,
       });
+    }, 1400);
+  };
+
+  // Trigger dynamic hazard & reroute on ANY active route being navigated
+  const handleTriggerActiveRouteIncident = () => {
+    if (!navRoute || navRoute.length < 4) {
+      handleTriggerSimIncident();
+      return;
+    }
+    setSimulationActive(true);
+    setSimStage('incident_detected');
+
+    const blockIdx = Math.min(vehicleRouteIdx + 2, navRoute.length - 1);
+    const blockPoint = navRoute[blockIdx];
+    const blockedSlice = navRoute.slice(
+      Math.max(0, blockIdx - 2),
+      Math.min(navRoute.length, blockIdx + 3)
+    );
+    setSimBlockedPath(blockedSlice);
+
+    const newInc = {
+      id: `sim-incident-${Date.now()}`,
+      lat: blockPoint[0],
+      lon: blockPoint[1],
+      type: 'Landslide',
+      severity: 'critical',
+      road: 'Active Sector Ahead',
+      desc: 'CRITICAL HAZARD: Sudden landslide and active debris blockage on route! Both lanes blocked completely.',
+      is_new: true,
+      is_blocked: true,
+    };
+    setLiveIncidents(prev => [newInc, ...prev]);
+
+    toast.error(`🚨 CRITICAL HAZARD DETECTED AHEAD: Landslide blockage at (${blockPoint[0].toFixed(4)}°N, ${blockPoint[1].toFixed(4)}°E)! Dynamic re-route calculating...`, {
+      duration: 6000,
+    });
+
+    setTimeout(() => {
+      if (routes.length > 1) {
+        const nextAlt = selectedIdx === 0 ? 1 : 0;
+        selectRoute(nextAlt);
+      } else {
+        const detour = navRoute.map((pt, i) => {
+          if (i >= blockIdx - 1 && i <= blockIdx + 2) {
+            return [pt[0] + 0.012, pt[1] + 0.016];
+          }
+          return pt;
+        });
+        setNavRoute(detour);
+      }
+      setSimStage('rerouted');
+      toast.success('✅ Dynamic Re-route Applied: Diverted around blocked sector via safe bypass!', { duration: 7000 });
     }, 1400);
   };
 
@@ -1811,6 +1880,18 @@ export const RoutePlanner = () => {
                     <SkipForward size={12} />
                   </button>
                   <button
+                    type="button"
+                    onClick={handleTriggerActiveRouteIncident}
+                    title="Simulate sudden hazard ahead on active path"
+                    style={{
+                      background: '#fee2e2', border: '1px solid #fca5a5', color: '#dc2626',
+                      borderRadius: 6, padding: '4px 7px', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700,
+                      display: 'inline-flex', alignItems: 'center', gap: 3,
+                    }}
+                  >
+                    <AlertTriangle size={11} /> Hazard
+                  </button>
+                  <button
                     onClick={() => setHudCollapsed(false)}
                     title="Expand Full Navigation HUD"
                     style={{
@@ -1871,20 +1952,21 @@ export const RoutePlanner = () => {
                 </div>
 
                 {/* Current step */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
                   <div style={{
-                    width: 48, height: 48, borderRadius: '50%', flexShrink: 0,
-                    background: 'var(--accent)', display: 'flex', alignItems: 'center',
-                    justifyContent: 'center', fontSize: '1.4rem', boxShadow: '0 0 0 4px rgba(59,130,246,0.2)',
+                    width: 38, height: 38, borderRadius: '50%',
+                    background: 'var(--accent)', color: '#fff',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '1.2rem', flexShrink: 0,
                   }}>
                     {currentNavStep.icon}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '1.15rem', fontWeight: 700, lineHeight: 1.2, color: 'var(--ink)' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--ink)' }}>
                       {currentNavStep.instruction}
                     </div>
                     {currentNavStep.distanceM > 0 && (
-                      <div style={{ fontSize: '0.85rem', color: 'var(--sky)', marginTop: 2 }}>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--sky)', fontWeight: 600 }}>
                         in {formatDist(currentNavStep.distanceM)}
                       </div>
                     )}
@@ -1957,6 +2039,27 @@ export const RoutePlanner = () => {
                     </button>
                   </div>
                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      onClick={handleTriggerActiveRouteIncident}
+                      title="Simulate sudden landslide blockage ahead on route and test dynamic detour"
+                      style={{
+                        padding: '4px 9px',
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        background: '#fee2e2',
+                        color: '#b91c1c',
+                        border: '1px solid #f87171',
+                        borderRadius: 6,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      <AlertTriangle size={12} color="#dc2626" />
+                      Simulate Hazard
+                    </button>
                     <button
                       onClick={() => setFollowUser(f => !f)}
                       className={followUser ? 'btn btn-primary' : 'btn btn-secondary'}
@@ -2249,29 +2352,69 @@ export const RoutePlanner = () => {
               </div>
             )}
 
-            <button
-              className="btn btn-primary"
-              onClick={handleFindRoutes}
-              disabled={!fromPlace || routeLoading || toLoading}
-              style={{ width: '100%', marginTop: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-            >
-              {routeLoading ? <Loader size={15} className="spin" /> : <Search size={15} />}
-              {routeLoading ? 'Scoring routes…' : 'Find Routes'}
-            </button>
+            {/* Primary Action Buttons: Both Find Routes AND Start Navigation */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '10px' }}>
+              <button
+                className="btn btn-secondary"
+                onClick={handleFindRoutes}
+                disabled={!fromPlace || routeLoading || toLoading}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  fontWeight: 700,
+                  padding: '9px 10px',
+                  fontSize: '0.82rem',
+                }}
+              >
+                {routeLoading ? <Loader size={14} className="spin" /> : <Search size={14} />}
+                {routeLoading ? 'Scoring…' : 'Find Routes'}
+              </button>
 
-            {/* Simulation Demo Trigger Card */}
+              <button
+                className="btn btn-primary"
+                onClick={handleDirectStartNavigation}
+                disabled={!fromPlace || !toPlace || routeLoading || toLoading}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  background: navigating ? '#059669' : 'linear-gradient(135deg, #10b981, #059669)',
+                  color: '#ffffff',
+                  fontWeight: 700,
+                  padding: '9px 10px',
+                  fontSize: '0.82rem',
+                  boxShadow: '0 2px 6px rgba(16, 185, 129, 0.3)',
+                  border: 'none',
+                  cursor: (!fromPlace || !toPlace || routeLoading || toLoading) ? 'not-allowed' : 'pointer',
+                  opacity: (!fromPlace || !toPlace || routeLoading || toLoading) ? 0.6 : 1,
+                }}
+              >
+                <Play size={14} fill={navigating ? '#fff' : 'currentColor'} />
+                {navigating ? 'Navigating…' : 'Start Navigation'}
+              </button>
+            </div>
+
+            {/* Quick Demo Sandbox Trigger Card */}
             <div style={{
               marginTop: 14,
               padding: '10px 12px',
-              background: 'linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%)',
-              border: '1.5px solid #86efac',
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
               borderRadius: 8,
             }}>
-              <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#166534', marginBottom: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Zap size={13} color="#16a34a" /> Demo: In-Route Landslide & Re-route
+              <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--ink)', marginBottom: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Zap size={13} color="var(--sky)" /> Demo: In-Route Landslide & Re-route
+                </span>
+                <span style={{ fontSize: '0.66rem', color: 'var(--sky-dark)', background: 'var(--sky-tint)', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>
+                  Demo Sandbox
+                </span>
               </div>
-              <p style={{ margin: '0 0 8px', fontSize: '0.72rem', color: '#15803d', lineHeight: 1.35 }}>
-                Simulate an active route (Haflong → Silchar) encountering a sudden landslide blockage and auto-calculating a safe detour.
+              <p style={{ margin: '0 0 8px', fontSize: '0.72rem', color: 'var(--slate)', lineHeight: 1.35 }}>
+                Simulate an active route (Haflong → Silchar on SH-5) encountering a sudden landslide blockage and auto-calculating a safe detour.
               </p>
               <button
                 type="button"
@@ -2279,9 +2422,9 @@ export const RoutePlanner = () => {
                 style={{
                   width: '100%',
                   padding: '7px 12px',
-                  background: 'linear-gradient(135deg, #16a34a, #15803d)',
-                  color: '#fff',
-                  border: 'none',
+                  background: '#ffffff',
+                  color: 'var(--ink)',
+                  border: '1px solid #cbd5e1',
                   borderRadius: 6,
                   fontSize: '0.78rem',
                   fontWeight: 700,
@@ -2290,11 +2433,13 @@ export const RoutePlanner = () => {
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 6,
-                  boxShadow: '0 2px 6px rgba(22, 163, 74, 0.25)',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
                   transition: 'all 0.15s ease',
                 }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.borderColor = 'var(--sky)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = '#ffffff'; e.currentTarget.style.borderColor = '#cbd5e1'; }}
               >
-                <Zap size={13} /> Launch In-Route Incident Simulation
+                <Zap size={13} color="#0284c7" /> Launch Demo In-Route Incident Simulation
               </button>
             </div>
           </div>
@@ -2339,6 +2484,33 @@ export const RoutePlanner = () => {
                       Scored lowest landslide risk among {routes.length} alternatives
                     </div>
                   )}
+
+                  {/* Immediate Start Navigation button on safest route */}
+                  <button
+                    className="btn btn-primary"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      selectRoute(0);
+                      startNavigation();
+                    }}
+                    disabled={navigating}
+                    style={{
+                      width: '100%',
+                      marginTop: '10px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      background: 'linear-gradient(135deg, #10b981, #059669)',
+                      fontWeight: 700,
+                      fontSize: '0.82rem',
+                      padding: '8px 12px',
+                      borderRadius: '7px',
+                    }}
+                  >
+                    <Play size={14} />
+                    {navigating ? 'Navigation Active…' : 'Start Navigation on Safest Route'}
+                  </button>
                 </div>
               )}
 
