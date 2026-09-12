@@ -667,6 +667,38 @@ tr:hover td { background-color: var(--sky-tint); }
 
 .leaflet-popup-tip { background-color: var(--white); }
 
+/* ── Focused-incident marker: permanent "View" plain-text label ── */
+.incident-label-tooltip {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.85), 0 0 6px rgba(0,0,0,0.5);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.incident-label-tooltip::before,
+.incident-label-tooltip .leaflet-tooltip-tip { display: none !important; }
+
+/* ── Focused-incident marker: hover dark detail pill ── */
+.incident-detail-tooltip {
+  background: rgba(15,23,42,0.94) !important;
+  border: none !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.45) !important;
+  padding: 8px 10px !important;
+  color: #f1f5f9 !important;
+  font-size: 0.72rem;
+  max-width: 240px;
+  white-space: normal !important;
+}
+.incident-detail-tooltip::before,
+.incident-detail-tooltip .leaflet-tooltip-tip { display: none !important; }
+
 .leaflet-control-zoom a {
   background-color: var(--white);
   color: var(--ink);

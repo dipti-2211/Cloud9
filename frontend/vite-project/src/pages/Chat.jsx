@@ -258,20 +258,25 @@ export const Chat = () => {
   }, [messages.length, scrollToBottom]);
 
   // 3. Socket.io Room join/leave and message listener
+  // Re-runs whenever `socket` identity changes (useSocket now returns state,
+  // so a singleton swap causes a re-render and this effect re-subscribes).
   useEffect(() => {
-    const s = socket?.current || socket;
+    const s = socket;
     if (!s || !activeConvId) return;
 
     const convIdStr = String(activeConvId);
 
-    if (typeof s.emit === 'function') {
-      s.emit('join_conversation', convIdStr);
-    }
+    // Emit join_conversation.  Socket.IO client buffers this automatically
+    // if the socket isn't connected yet, so no explicit connected-guard needed.
+    const joinRoom = () => s.emit('join_conversation', convIdStr);
+    joinRoom();
 
-    const onConnect = () => {
-      s.emit('join_conversation', convIdStr);
-    };
+    // Re-join on every reconnect (server drops room membership on disconnect)
+    const onConnect = () => joinRoom();
 
+    // ── Primary message delivery ──────────────────────────────────────────
+    // Backend emits "chat_message" only to sockets inside conversation:{id}.
+    // This is the single source of truth for appending new messages.
     const handleChatMessage = (newMsg) => {
       if (String(newMsg?.conversationId) === convIdStr) {
         appendUniqueMessage(newMsg);
@@ -279,42 +284,42 @@ export const Chat = () => {
       }
     };
 
-    const handleGlobalChat = ({ conversationId, message }) => {
+    // ── Sidebar / unread counter update ───────────────────────────────────
+    // Backend broadcasts "new_chat_message" globally (io.emit) so every
+    // connected client can update its conversation list even if it hasn't
+    // joined the room.  We do NOT appendUniqueMessage here — that's handled
+    // above.  Keeping the two responsibilities separate prevents double
+    // delivery in the two-tab scenario.
+    const handleSidebarUpdate = ({ conversationId, message }) => {
+      if (!message) return;
       const targetIdStr = String(conversationId);
-      if (targetIdStr === convIdStr && message) {
-        appendUniqueMessage(message);
-        setTimeout(() => scrollToBottom('smooth'), 50);
-      }
-      setConversations(prev => {
-        return prev.map(c => {
-          if (String(c._id) === targetIdStr) {
-            return {
-              ...c,
-              lastMessage: message.text || (message.attachmentUrl ? '📷 Photo attached' : 'New message'),
-              lastMessageAt: message.createdAt || new Date(),
-              unreadCountAdmin: (!isAdmin || targetIdStr === convIdStr) ? c.unreadCountAdmin : (c.unreadCountAdmin || 0) + 1,
-              unreadCountOfficer: (isAdmin || targetIdStr === convIdStr) ? c.unreadCountOfficer : (c.unreadCountOfficer || 0) + 1,
-            };
-          }
-          return c;
-        });
-      });
+      const isActive    = targetIdStr === convIdStr;
+
+      setConversations(prev => prev.map(c => {
+        if (String(c._id) !== targetIdStr) return c;
+        return {
+          ...c,
+          lastMessage:       message.text || (message.attachmentUrl ? '📷 Photo' : 'New message'),
+          lastMessageAt:     message.createdAt || new Date(),
+          // Increment unread only for conversations the user isn't looking at
+          unreadCountAdmin:   (!isAdmin && !isActive) ? (c.unreadCountAdmin   || 0) + 1 : c.unreadCountAdmin,
+          unreadCountOfficer: ( isAdmin && !isActive) ? (c.unreadCountOfficer || 0) + 1 : c.unreadCountOfficer,
+        };
+      }));
     };
 
     if (typeof s.on === 'function') {
-      s.on('connect', onConnect);
-      s.on('chat_message', handleChatMessage);
-      s.on('new_chat_message', handleGlobalChat);
+      s.on('connect',          onConnect);
+      s.on('chat_message',     handleChatMessage);
+      s.on('new_chat_message', handleSidebarUpdate);
     }
 
     return () => {
-      if (typeof s.emit === 'function') {
-        s.emit('leave_conversation', convIdStr);
-      }
+      if (typeof s.emit === 'function') s.emit('leave_conversation', convIdStr);
       if (typeof s.off === 'function') {
-        s.off('connect', onConnect);
-        s.off('chat_message', handleChatMessage);
-        s.off('new_chat_message', handleGlobalChat);
+        s.off('connect',          onConnect);
+        s.off('chat_message',     handleChatMessage);
+        s.off('new_chat_message', handleSidebarUpdate);
       }
     };
   }, [socket, activeConvId, isAdmin, appendUniqueMessage, scrollToBottom]);

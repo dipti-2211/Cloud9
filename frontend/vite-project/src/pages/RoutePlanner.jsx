@@ -12,7 +12,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker, useMap
+  MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker, useMap, Tooltip
 } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -587,6 +587,7 @@ export const RoutePlanner = () => {
     const incidentId = searchParams.get('incidentId');
     const incidentLoc = searchParams.get('incidentLoc');
     const incidentType = searchParams.get('incidentType');
+    const incidentDesc = searchParams.get('desc');
     const zoomVal = parseInt(searchParams.get('zoom') || '16', 10);
 
     if (focusLat && focusLon) {
@@ -600,6 +601,7 @@ export const RoutePlanner = () => {
           id: incidentId || 'INC-FOCUSED',
           location: incidentLoc ? decodeURIComponent(incidentLoc) : 'Reported Incident Point',
           type: incidentType ? decodeURIComponent(incidentType) : 'Landslide',
+          desc: incidentDesc ? decodeURIComponent(incidentDesc) : null,
         });
         toast.success(`📍 Map focused on reported ${incidentType || 'incident'} at (${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E)`);
       }
@@ -1735,22 +1737,40 @@ export const RoutePlanner = () => {
                 })}
                 zIndexOffset={1500}
               >
-                <Popup minWidth={240} autoClose={false}>
-                  <div style={{ padding: '6px 2px' }}>
-                    <div style={{ background: '#e0f2fe', color: '#0284c7', padding: '2px 8px', borderRadius: 4, fontWeight: 800, fontSize: '0.72rem', marginBottom: 4 }}>
-                      📍 PLATFORM GIS FOCUSED INCIDENT
-                    </div>
-                    <div style={{ fontWeight: 700, fontSize: '0.88rem', marginBottom: 3 }}>
+                {/* Always-visible plain-text label — no white box */}
+                <Tooltip
+                  permanent
+                  direction="top"
+                  offset={[0, -22]}
+                  className="incident-label-tooltip"
+                >
+                  View
+                </Tooltip>
+
+                {/* Hover-triggered dark detail pill */}
+                <Tooltip
+                  direction="top"
+                  offset={[0, -22]}
+                  sticky={false}
+                  className="incident-detail-tooltip"
+                >
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '0.78rem', marginBottom: 3 }}>
                       {focusedIncident.location}
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
-                      Exact Point: {focusedIncident.lat.toFixed(5)}° N, {focusedIncident.lon.toFixed(5)}° E
+                    <div style={{ fontSize: '0.68rem', opacity: 0.75, marginBottom: 2 }}>
+                      {focusedIncident.lat.toFixed(5)}°N, {focusedIncident.lon.toFixed(5)}°E
                     </div>
-                    <div style={{ fontSize: '0.74rem', color: '#dc2626', fontWeight: 700, marginTop: 4 }}>
-                      Hazard Type: {focusedIncident.type}
+                    <div style={{ fontSize: '0.7rem', color: '#f87171', fontWeight: 700 }}>
+                      {focusedIncident.type}
                     </div>
+                    {focusedIncident.desc && (
+                      <div style={{ fontSize: '0.67rem', opacity: 0.8, marginTop: 3, lineHeight: 1.35, maxWidth: 200 }}>
+                        {focusedIncident.desc}
+                      </div>
+                    )}
                   </div>
-                </Popup>
+                </Tooltip>
               </Marker>
             )}
 

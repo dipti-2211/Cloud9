@@ -555,9 +555,6 @@ export const IncidentReport = () => {
                             ({Math.round(photoAnalysis.vision_analysis.confidence * 100)}% conf.)
                           </span>
                         )}
-                        <span style={{ fontSize: '0.72rem', color: '#16a34a', fontWeight: 600 }}>
-                          · Form auto-filled
-                        </span>
                       </>
                     ) : (
                       <span style={{ fontSize: '0.75rem', color: '#64748b' }}>

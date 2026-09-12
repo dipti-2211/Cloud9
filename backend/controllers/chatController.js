@@ -328,7 +328,19 @@ exports.sendMessage = async (req, res) => {
       }
     }
 
-    // Broadcast via socket.io
+    // Broadcast via socket.io — two distinct events with distinct purposes:
+    //
+    //  "chat_message"     → targeted to the conversation room only.
+    //                       Chat.jsx handleChatMessage appends it to the
+    //                       message list.  This is the PRIMARY delivery path.
+    //
+    //  "new_chat_message" → global broadcast (all connected clients).
+    //                       Chat.jsx handleSidebarUpdate uses it ONLY to
+    //                       refresh the conversation-list preview & unread
+    //                       counter — it does NOT append the message again.
+    //                       This keeps tabs that haven't joined the room
+    //                       (e.g. a tab viewing a different conversation) in
+    //                       sync on the sidebar without causing double-delivery.
     const io = req.app.get("io");
     if (io) {
       io.to(`conversation:${String(id)}`).emit("chat_message", savedMessage);

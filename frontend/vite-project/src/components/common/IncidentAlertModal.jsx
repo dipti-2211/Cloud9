@@ -75,8 +75,25 @@ export const IncidentAlertModal = () => {
       const slope = data.slope ?? data.slope_deg;
       const rain = data.rainfall_mm ?? data.rainfall;
       const description = data.description || data.message || `Immediate road hazard reported on ${road}. Proceed with caution or follow detour.`;
-      const lat = data.location?.coordinates?.[1] || data.latitude || data.lat || 25.5;
-      const lon = data.location?.coordinates?.[0] || data.longitude || data.lon || 92.5;
+
+      // Safely extract coordinates — handle GeoJSON [lon,lat], plain fields, and transposed values
+      let lat, lon;
+      const geoCoords = data.location?.coordinates;
+      if (Array.isArray(geoCoords) && geoCoords.length >= 2) {
+        // GeoJSON stores [longitude, latitude]
+        lon = parseFloat(geoCoords[0]);
+        lat = parseFloat(geoCoords[1]);
+      } else {
+        lat = parseFloat(data.latitude ?? data.lat ?? 0);
+        lon = parseFloat(data.longitude ?? data.lon ?? 0);
+      }
+      // Sanity-check: swap if values look transposed (lat for NE India is ~20–30)
+      if (!isFinite(lat) || !isFinite(lon) || (Math.abs(lon) <= 90 && Math.abs(lat) > Math.abs(lon) && Math.abs(lat) > 90)) {
+        [lat, lon] = [lon, lat];
+      }
+      // Final fallback to NE India centre if still invalid
+      if (!isFinite(lat) || lat === 0) lat = 25.5;
+      if (!isFinite(lon) || lon === 0) lon = 92.5;
 
       const alertObj = {
         id,
@@ -153,11 +170,11 @@ export const IncidentAlertModal = () => {
     <div
       style={{
         position: 'fixed',
-        top: 20,
-        right: 20,
+        top: 16,
+        right: 16,
         zIndex: 999999,
-        width: 'calc(100vw - 40px)',
-        maxWidth: 440,
+        width: 'calc(100vw - 32px)',
+        maxWidth: 340,
         pointerEvents: 'auto',
         animation: 'slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
       }}
@@ -167,103 +184,104 @@ export const IncidentAlertModal = () => {
       <div
         style={{
           background: 'var(--surface, #ffffff)',
-          borderRadius: 14,
-          boxShadow: '0 16px 40px rgba(220, 38, 38, 0.35), 0 6px 16px rgba(0, 0, 0, 0.15)',
-          border: '2px solid #ef4444',
+          borderRadius: 10,
+          boxShadow: '0 10px 28px rgba(220, 38, 38, 0.25), 0 4px 10px rgba(0, 0, 0, 0.10)',
+          border: '1.5px solid #ef4444',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
         }}
       >
-        {/* Urgent Header Banner */}
+        {/* Urgent Header Banner — compact */}
         <div
           style={{
             background: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
-            padding: '10px 14px',
+            padding: '6px 10px',
             color: '#ffffff',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span
               style={{
-                width: 9,
-                height: 9,
+                width: 7,
+                height: 7,
                 borderRadius: '50%',
                 background: '#ffffff',
-                boxShadow: '0 0 8px #ffffff',
+                boxShadow: '0 0 6px #ffffff',
                 display: 'inline-block',
                 animation: 'pulse-danger 1.5s infinite',
+                flexShrink: 0,
               }}
             />
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Radio size={13} className="spin" />
-              <span style={{ fontSize: '0.74rem', fontWeight: 900, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-                LIVE HAZARD ALERT
-              </span>
-            </div>
-            <span style={{ fontSize: '0.7rem', opacity: 0.85, display: 'flex', alignItems: 'center', gap: 3, marginLeft: 4 }}>
-              <Clock size={10} /> {activeAlert.time}
+            <Radio size={11} className="spin" />
+            <span style={{ fontSize: '0.67rem', fontWeight: 900, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              LIVE HAZARD ALERT
+            </span>
+            <span style={{ fontSize: '0.63rem', opacity: 0.82, display: 'flex', alignItems: 'center', gap: 2, marginLeft: 2 }}>
+              <Clock size={9} /> {activeAlert.time}
             </span>
           </div>
 
           <button
             onClick={() => setActiveAlert(null)}
             style={{
-              background: 'rgba(255, 255, 255, 0.2)',
+              background: 'rgba(255, 255, 255, 0.18)',
               border: 'none',
               borderRadius: '50%',
-              width: 24,
-              height: 24,
+              width: 20,
+              height: 20,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               cursor: 'pointer',
               color: '#ffffff',
               transition: 'background 0.15s',
+              flexShrink: 0,
             }}
             title="Dismiss Alert"
           >
-            <X size={14} />
+            <X size={12} />
           </button>
         </div>
 
-        {/* Content Body */}
-        <div style={{ padding: '14px 16px' }}>
+        {/* Content Body — compact */}
+        <div style={{ padding: '9px 11px' }}>
           {/* Headline & Blockage Badge */}
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
-            <div>
-              <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--ink, #0f172a)', lineHeight: 1.25 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--ink, #0f172a)', lineHeight: 1.2 }}>
                 {activeAlert.type}
               </div>
-              <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#dc2626', marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
-                <MapPin size={13} />
-                <span>{activeAlert.road}</span>
-                <span style={{ color: 'var(--text-secondary, #64748b)', fontWeight: 500 }}>· {activeAlert.district}</span>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#dc2626', marginTop: 2, display: 'flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
+                <MapPin size={11} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '120px' }}>{activeAlert.road}</span>
+                <span style={{ color: 'var(--text-secondary, #64748b)', fontWeight: 500, flexShrink: 0 }}>· {activeAlert.district}</span>
               </div>
             </div>
 
             <span
               style={{
-                fontSize: '0.68rem',
+                fontSize: '0.6rem',
                 fontWeight: 800,
-                padding: '3px 8px',
-                borderRadius: 6,
+                padding: '2px 5px',
+                borderRadius: 4,
                 background: isFullBlock ? '#fee2e2' : '#fef3c7',
                 color: isFullBlock ? '#b91c1c' : '#b45309',
                 border: `1px solid ${isFullBlock ? '#f87171' : '#f59e0b'}`,
                 whiteSpace: 'nowrap',
                 textTransform: 'uppercase',
+                flexShrink: 0,
               }}
             >
-              {isFullBlock ? '⛔ Road Blocked' : '⚠️ Partial Block'}
+              {isFullBlock ? '⛔ Blocked' : '⚠️ Partial'}
             </span>
           </div>
 
           {/* Description */}
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary, #475569)', lineHeight: 1.45, marginTop: 8 }}>
+          <div style={{ fontSize: '0.71rem', color: 'var(--text-secondary, #475569)', lineHeight: 1.38, marginTop: 5 }}>
             {activeAlert.description}
           </div>
 
@@ -272,50 +290,56 @@ export const IncidentAlertModal = () => {
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 12,
-              marginTop: 10,
-              padding: '6px 10px',
-              borderRadius: 8,
+              gap: 8,
+              marginTop: 6,
+              padding: '4px 7px',
+              borderRadius: 6,
               background: 'var(--surface-elevated, #f8fafc)',
               border: '1px solid var(--line, #e2e8f0)',
-              fontSize: '0.72rem',
+              fontSize: '0.65rem',
               color: 'var(--text-secondary, #64748b)',
+              flexWrap: 'wrap',
             }}
           >
             {activeAlert.slope != null && (
-              <span>🏔 Slope: <strong style={{ color: 'var(--ink, #0f172a)' }}>{activeAlert.slope}°</strong></span>
+              <span>🏔 <strong style={{ color: 'var(--ink, #0f172a)' }}>{activeAlert.slope}°</strong></span>
             )}
             {activeAlert.rain != null && (
-              <span>🌧 Rain: <strong style={{ color: 'var(--ink, #0f172a)' }}>{activeAlert.rain}mm</strong></span>
+              <span>🌧 <strong style={{ color: 'var(--ink, #0f172a)' }}>{activeAlert.rain}mm</strong></span>
             )}
-            <span>👤 Officer: <strong style={{ color: 'var(--ink, #0f172a)' }}>{activeAlert.officer}</strong></span>
+            <span>👤 <strong style={{ color: 'var(--ink, #0f172a)' }}>{activeAlert.officer}</strong></span>
           </div>
 
-          {/* Action Buttons */}
-          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          {/* Action links — plain text, no button box */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+            {/* "View" deep-links into /planner with exact incident coords */}
             <button
               onClick={() => {
                 setActiveAlert(null);
-                navigate('/dashboard');
+                const locStr = [activeAlert.road, activeAlert.district].filter(Boolean).join(', ');
+                navigate(
+                  `/planner?focusLat=${activeAlert.lat}&focusLon=${activeAlert.lon}` +
+                  `&incidentId=${encodeURIComponent(activeAlert.id)}` +
+                  `&incidentLoc=${encodeURIComponent(locStr)}` +
+                  `&incidentType=${encodeURIComponent(activeAlert.type)}` +
+                  `&desc=${encodeURIComponent(activeAlert.description)}` +
+                  `&zoom=16`
+                );
               }}
               style={{
-                flex: 1,
-                padding: '8px 12px',
-                borderRadius: 8,
-                background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
-                color: '#ffffff',
+                background: 'none',
                 border: 'none',
-                fontWeight: 700,
-                fontSize: '0.8rem',
+                padding: 0,
                 cursor: 'pointer',
-                display: 'flex',
+                color: '#2563eb',
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                display: 'inline-flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                gap: 5,
-                boxShadow: '0 2px 6px rgba(37,99,235,0.3)',
+                gap: 3,
               }}
             >
-              <MapPin size={13} /> View on Map
+              <MapPin size={11} /> View
             </button>
 
             <button
@@ -324,22 +348,19 @@ export const IncidentAlertModal = () => {
                 navigate('/incidents');
               }}
               style={{
-                flex: 1,
-                padding: '8px 12px',
-                borderRadius: 8,
-                background: 'var(--surface-elevated, #f1f5f9)',
-                color: 'var(--ink, #0f172a)',
-                border: '1px solid var(--line, #cbd5e1)',
-                fontWeight: 700,
-                fontSize: '0.8rem',
+                background: 'none',
+                border: 'none',
+                padding: 0,
                 cursor: 'pointer',
-                display: 'flex',
+                color: 'var(--text-secondary, #64748b)',
+                fontSize: '0.72rem',
+                fontWeight: 600,
+                display: 'inline-flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                gap: 5,
+                gap: 3,
               }}
             >
-              Incident List <ArrowRight size={13} />
+              All Incidents <ArrowRight size={11} />
             </button>
           </div>
         </div>
