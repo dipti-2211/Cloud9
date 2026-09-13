@@ -1,15 +1,14 @@
-# Derived rasters produced by precompute_layers.py
-data/slope.tif
-data/aspect.tif
-data/dist_to_road.tif
+# Derived rasters produced by precompute_layers.py (keep intermediate rasters ignored)
 data/_dist_to_road_utm.tif
 
 # Source data files — large binaries, keep out of git
-data/*.pkl
 data/*.nc
 data/*.pbf
-data/*.tif
 data/.gitkeep
+
+# Explicitly un-ignore runtime data rasters and ML model
+!data/*.tif
+!data/*.pkl
 
 # Python virtualenv
 .venv/
