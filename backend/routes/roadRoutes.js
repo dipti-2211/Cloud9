@@ -17,6 +17,11 @@ router.get(
 );
 
 router.get(
+    "/removed",
+    roadController.getRemovedRoads
+);
+
+router.get(
     "/:id",
     roadController.getRoadById
 );
@@ -29,6 +34,16 @@ router.post(
 router.put(
     "/:id",
     roadController.updateRoad
+);
+
+router.patch(
+    "/:id/restore",
+    roadController.restoreRoad
+);
+
+router.post(
+    "/:id/restore",
+    roadController.restoreRoad
 );
 
 router.delete(

@@ -6,11 +6,16 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    strictPort: false,   // bump to 5174 if 5173 is taken
+    strictPort: true,   // Only run on 5173; do not switch to 5174 or other ports
     host: true,
     proxy: {
-      // Forward all /api/* calls to the backend — eliminates CORS entirely
+      // Forward all /api/* and /uploads/* calls to the backend
       '/api': {
+        target: 'http://localhost:1710',
+        changeOrigin: true,
+        secure: false,
+      },
+      '/uploads': {
         target: 'http://localhost:1710',
         changeOrigin: true,
         secure: false,

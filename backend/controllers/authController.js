@@ -513,7 +513,7 @@ const register =
                         normalizedRole,
 
                     accountStatus:
-                        "PENDING",
+                        "APPROVED",
 
                     firstName:
                         data.firstName,

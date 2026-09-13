@@ -9,19 +9,102 @@
  *            error, the report is saved to localStorage['sih_offline_incidents'] and
  *            synced automatically when the browser goes online.
  */
-import { incidents } from '../data/mockData';
+import { incidents as initialMockIncidents } from '../data/mockData';
 import { Badge } from '../components/common/Badge';
 import { PageHeader } from '../components/common/PageHeader';
+import { useNavigate } from 'react-router-dom';
 import { Modal } from '../components/common/Modal';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList
 } from 'recharts';
+import { MapContainer, TileLayer, Marker, Popup, useMap, Circle } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import toast from 'react-hot-toast';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Camera, X, MapPin, Loader } from 'lucide-react';
+import { Camera, X, MapPin, Loader, RefreshCw, Eye, MessageSquare, ExternalLink, Navigation } from 'lucide-react';
 import { useUserLocation } from '../hooks/useUserLocation';
-import { reverseGeocode, incidentsAPI } from '../services/api';
+import { reverseGeocode, incidentsAPI, auth } from '../services/api';
 import { useLang } from '../i18n/LanguageContext';
+import { useSocket } from '../hooks/useSocket';
+
+const formatLiveIncident = (item) => {
+  const shortId = item._id ? `INC-${item._id.slice(-4).toUpperCase()}` : (item.id || 'INC-LIVE');
+  const typeMap = {
+    landslide: 'Landslide',
+    rockfall: 'Landslide',
+    flooding: 'Heavy Rainfall',
+    heavy_rain: 'Heavy Rainfall',
+    road_damage: 'Bridge / Road Damage',
+    bridge_damage: 'Bridge / Road Damage',
+    accident: 'Mechanical Breakdown',
+    breakdown: 'Mechanical Breakdown',
+    overspeeding: 'Overspeeding',
+  };
+  const rawType = (item.incident_type || item.type || 'landslide').toLowerCase();
+  const cause = typeMap[rawType] || 'Landslide';
+  const displayType = rawType === 'landslide' ? 'Landslide' :
+                      rawType === 'rockfall' ? 'Rockfall' :
+                      rawType === 'road_damage' ? 'Bridge Damage' :
+                      rawType === 'flooding' ? 'Heavy Rainfall' :
+                      rawType.charAt(0).toUpperCase() + rawType.slice(1);
+
+  const roadName = item.road_segment_id?.road_name || item.road_name || item.locationLabel || 'NER Corridor';
+  const district = (item.road_segment_id?.district || item.district) ? `, ${item.road_segment_id?.district || item.district}` : '';
+  const location = `${roadName}${district}`;
+  const rawSev = (item.reported_risk_level || item.severity || 'CRITICAL').toUpperCase();
+  const severity = (rawSev === 'HIGH' || rawSev === 'CRITICAL') ? 'CRITICAL' : (rawSev === 'MEDIUM' || rawSev === 'WARNING') ? 'WARNING' : 'INFO';
+  const time = item.created_at
+    ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : 'Just now';
+
+  // Robustly extract exact coordinates (GeoJSON [lon, lat], latitude/longitude, or position [lat, lon])
+  let lat = null;
+  let lon = null;
+  if (item.location?.coordinates && Array.isArray(item.location.coordinates) && item.location.coordinates.length >= 2) {
+    lon = Number(item.location.coordinates[0]);
+    lat = Number(item.location.coordinates[1]);
+  }
+  if (lat == null || isNaN(lat)) {
+    lat = Number(item.latitude ?? item.lat ?? (Array.isArray(item.position) ? item.position[0] : null));
+  }
+  if (lon == null || isNaN(lon)) {
+    lon = Number(item.longitude ?? item.lon ?? (Array.isArray(item.position) ? item.position[1] : null));
+  }
+  // Sanity check: In Northeast India, latitude is ~22-29 and longitude is ~88-97. If swapped, correct them.
+  if (lat != null && lon != null && lat > 80 && lon < 40) {
+    const temp = lat;
+    lat = lon;
+    lon = temp;
+  }
+  // Fallback if completely missing
+  if (lat == null || isNaN(lat) || lon == null || isNaN(lon)) {
+    lat = 25.1450;
+    lon = 93.0100;
+  }
+
+  return {
+    id: shortId,
+    rawId: item._id || item.id,
+    officerName: item.field_officer_name || (item.reportedBy && !['admin', 'system administrator'].includes(item.reportedBy.toLowerCase()) ? item.reportedBy : 'Field Officer (OFC-1042)'),
+    type: displayType,
+    cause: cause,
+    location: location,
+    severity: severity,
+    time: time,
+    status: 'ACTIVE',
+    isLive: true,
+    isNew: Boolean(item.is_new ?? item.isNew ?? true),
+    roadBlock: item.road_block,
+    trafficCondition: item.traffic_condition,
+    description: item.description,
+    slope: item.slope ?? item.slope_deg,
+    rainfall: item.rainfall_mm,
+    photoUrl: item.photo_url || item.photoUrl || null,
+    lat,
+    lon,
+  };
+};
 
 // Offline queue helpers
 const QUEUE_KEY = 'sih_offline_incidents';
@@ -51,9 +134,287 @@ const CAUSE_COLORS = {
 };
 const DEFAULT_COLOR = '#64748b';
 
+// Precision pinpoint icon targeting exact ground coordinate
+const createExactHazardPinIcon = (type = 'Landslide') => L.divIcon({
+  className: 'exact-hazard-pin-marker',
+  iconSize: [44, 52],
+  iconAnchor: [22, 50], // Bottom needle tip rests EXACTLY on the coordinate
+  popupAnchor: [0, -52],
+  html: `
+    <div style="position:relative; width:44px; height:52px; display:flex; flex-direction:column; align-items:center;">
+      <!-- Pin head -->
+      <div style="
+        width:40px; height:40px; border-radius:50% 50% 50% 4px;
+        transform:rotate(-45deg);
+        background:linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+        border:3px solid #ffffff;
+        box-shadow:0 6px 18px rgba(220, 38, 38, 0.7), 0 2px 6px rgba(0,0,0,0.35);
+        display:flex; align-items:center; justify-content:center;
+      ">
+        <span style="transform:rotate(45deg); font-size:18px; line-height:1; display:inline-block;">⚠️</span>
+      </div>
+      <!-- Ground point pulse ring -->
+      <div style="
+        position:absolute; bottom:0px; width:14px; height:6px;
+        border-radius:50%; background:rgba(220, 38, 38, 0.8);
+        box-shadow:0 0 10px 4px rgba(239, 68, 68, 0.75);
+      "></div>
+    </div>
+  `,
+});
+
+// Map controller to force Leaflet container recalculation and smooth flyTo to exact point
+const ExactPointMapController = ({ center }) => {
+  const map = useMap();
+  useEffect(() => {
+    map.invalidateSize();
+    map.setView(center, 16, { animate: true });
+    const t1 = setTimeout(() => {
+      map.invalidateSize();
+      map.setView(center, 16);
+    }, 120);
+    const t2 = setTimeout(() => {
+      map.invalidateSize();
+    }, 400);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [center, map]);
+  return null;
+};
+
+// ─── IncidentMapModal ─────────────────────────────────────────────────────────
+const IncidentMapModal = ({ incident, onClose, onMessageOfficer }) => {
+  const navigate = useNavigate();
+  if (!incident) return null;
+  const lat = Number(incident.lat ?? 25.1450);
+  const lon = Number(incident.lon ?? 93.0100);
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 99990,
+        background: 'rgba(2,6,23,0.82)', backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--white, #fff)', borderRadius: 16,
+          width: 740, maxWidth: '95vw', maxHeight: '92vh',
+          overflow: 'hidden', display: 'flex', flexDirection: 'column',
+          boxShadow: '0 25px 80px rgba(0,0,0,0.6)',
+          border: '1px solid var(--line)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{
+          background: 'linear-gradient(135deg, #dc2626, #991b1b)',
+          padding: '16px 20px', color: '#fff',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <MapPin size={18} /> {incident.location || 'Incident Marked Location'}
+            </div>
+            <div style={{ fontSize: '0.78rem', opacity: 0.9, marginTop: 4, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span>{incident.id} · {incident.type} ({incident.severity})</span>
+              <span style={{ background: 'rgba(255,255,255,0.2)', padding: '1px 8px', borderRadius: 4, fontFamily: 'monospace', fontWeight: 700 }}>
+                📍 {lat.toFixed(5)}° N, {lon.toFixed(5)}° E
+              </span>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'rgba(255,255,255,0.2)',
+              border: 'none',
+              borderRadius: '50%',
+              width: 32,
+              height: 32,
+              cursor: 'pointer',
+              color: '#fff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'background 0.15s ease',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.35)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Map Container with Exact Marker & Invalidation */}
+        <div style={{ height: 380, width: '100%', position: 'relative', background: '#e2e8f0' }}>
+          <MapContainer
+            key={`${incident.rawId || incident.id}-${lat}-${lon}`}
+            center={[lat, lon]}
+            zoom={16}
+            style={{ height: '100%', width: '100%' }}
+            zoomControl={true}
+          >
+            <TileLayer
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              attribution="&copy; OpenStreetMap contributors"
+              maxZoom={19}
+            />
+
+            {/* Invalidate size and fly directly to exact point */}
+            <ExactPointMapController center={[lat, lon]} />
+
+            {/* Impact & hazard radius around exact point */}
+            <Circle
+              center={[lat, lon]}
+              radius={90}
+              pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.18, weight: 2, dashArray: '5, 5' }}
+            />
+
+            {/* Exact pinpoint needle */}
+            <Marker
+              position={[lat, lon]}
+              icon={createExactHazardPinIcon(incident.type)}
+              ref={m => { if (m) setTimeout(() => m.openPopup(), 250); }}
+            >
+              <Popup autoClose={false} closeOnClick={false}>
+                <div style={{ padding: '6px 8px', minWidth: 210 }}>
+                  <div style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, background: '#fee2e2', color: '#dc2626', fontWeight: 800, fontSize: '0.74rem', marginBottom: 6 }}>
+                    ⚠️ {incident.type?.toUpperCase() || 'LANDSLIDE'} MARKED POINT
+                  </div>
+                  <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>
+                    {incident.location}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: '#0369a1', background: '#e0f2fe', padding: '3px 6px', borderRadius: 4, border: '1px solid #bae6fd', fontWeight: 700, marginBottom: 4 }}>
+                    📍 {lat.toFixed(6)}° N, {lon.toFixed(6)}° E
+                  </div>
+                  {incident.roadBlock && incident.roadBlock !== 'none' && (
+                    <div style={{ fontSize: '0.74rem', color: '#b91c1c', fontWeight: 700 }}>
+                      Road Blockage: {incident.roadBlock.toUpperCase()}
+                    </div>
+                  )}
+                </div>
+              </Popup>
+            </Marker>
+          </MapContainer>
+
+          {/* Floating Exact Coordinates & High-Zoom Badge on Map */}
+          <div style={{
+            position: 'absolute',
+            top: 12,
+            right: 12,
+            zIndex: 999,
+            background: 'rgba(15, 23, 42, 0.88)',
+            backdropFilter: 'blur(8px)',
+            color: '#ffffff',
+            padding: '6px 12px',
+            borderRadius: 8,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
+            border: '1px solid rgba(255,255,255,0.18)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: '0.78rem',
+            pointerEvents: 'none',
+          }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#ef4444', boxShadow: '0 0 8px #ef4444' }} />
+            <span>Exact Point: <strong>{lat.toFixed(5)}° N, {lon.toFixed(5)}° E</strong> (Street View 16x)</span>
+          </div>
+        </div>
+
+        {/* Info Footer */}
+        <div style={{ padding: '14px 20px', display: 'flex', gap: 16, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', borderTop: '1px solid var(--line)', background: '#f8fafc' }}>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+            {incident.roadBlock && incident.roadBlock !== 'none' && (
+              <div style={{ fontSize: '0.8rem' }}>
+                <span style={{ color: 'var(--slate)', marginRight: 4 }}>Blockage:</span>
+                <span style={{ fontWeight: 800, color: '#ef4444' }}>{incident.roadBlock.toUpperCase()}</span>
+              </div>
+            )}
+            {incident.slope != null && (
+              <div style={{ fontSize: '0.8rem' }}>
+                <span style={{ color: 'var(--slate)', marginRight: 4 }}>Slope:</span>
+                <span style={{ fontWeight: 700 }}>{incident.slope}°</span>
+              </div>
+            )}
+            {incident.rainfall != null && (
+              <div style={{ fontSize: '0.8rem' }}>
+                <span style={{ color: 'var(--slate)', marginRight: 4 }}>Rainfall:</span>
+                <span style={{ fontWeight: 700 }}>{incident.rainfall} mm</span>
+              </div>
+            )}
+            <div style={{ fontSize: '0.8rem' }}>
+              <span style={{ color: 'var(--slate)', marginRight: 4 }}>Officer:</span>
+              <span style={{ fontWeight: 700, color: 'var(--ink)' }}>{incident.officerName}</span>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                navigate(`/planner?focusLat=${lat}&focusLon=${lon}&incidentId=${incident.rawId || incident.id || ''}&incidentLoc=${encodeURIComponent(incident.location || '')}&incidentType=${encodeURIComponent(incident.type || 'Landslide')}&zoom=16`);
+              }}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 7,
+                background: '#ffffff',
+                color: 'var(--sky-dark)',
+                border: '1px solid var(--sky)',
+                fontSize: '0.76rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                boxShadow: '0 1px 3px rgba(2, 132, 199, 0.12)',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'var(--sky-tint)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#ffffff'; }}
+            >
+              <Navigation size={13} color="var(--sky)" /> View on Platform GIS Map
+            </button>
+
+            {onMessageOfficer && (
+              <button
+                onClick={() => onMessageOfficer(incident)}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 7,
+                  background: 'var(--sky)',
+                  color: '#ffffff',
+                  border: 'none',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  boxShadow: '0 1px 4px rgba(2, 132, 199, 0.3)',
+                }}
+              >
+                <MessageSquare size={13} /> Message Officer
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const Incidents = () => {
+  const navigate = useNavigate();
   const { t } = useLang();
+  const user = auth.getUser();
+  const canReportIncident = user?.role === 'ADMIN' || user?.role === 'FIELD_OFFICER';
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [mapTarget, setMapTarget] = useState(null); // incident to view on map
   const [photoPreview, setPhotoPreview] = useState(null);
   const [photoBase64,  setPhotoBase64]  = useState(null);
   const [deaths,       setDeaths]       = useState('');
@@ -195,26 +556,80 @@ export const Incidents = () => {
     setSubmitting(false);
   };
 
+  // ── Live Incidents State & Socket Sync ──────────────────────────────────────
+  const [incidentList, setIncidentList] = useState(initialMockIncidents);
+  const [loadingLive,  setLoadingLive]  = useState(true);
+  const { socket } = useSocket();
+
+  const loadIncidents = useCallback(async () => {
+    setLoadingLive(true);
+    try {
+      const baseUrl = import.meta.env.VITE_API_URL || '';
+      const res = await fetch(`${baseUrl}/api/road-incidents`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.incidents) && data.incidents.length > 0) {
+        const liveFormatted = data.incidents.map(item => ({
+          ...formatLiveIncident(item),
+          isNew: Boolean(item.is_new ?? false),
+        }));
+        const liveIds = new Set(liveFormatted.map(i => i.id));
+        const merged = [...liveFormatted, ...initialMockIncidents.filter(i => !liveIds.has(i.id))];
+        setIncidentList(merged);
+      } else {
+        setIncidentList(initialMockIncidents);
+      }
+    } catch {
+      setIncidentList(initialMockIncidents);
+    } finally {
+      setLoadingLive(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadIncidents();
+  }, [loadIncidents]);
+
+  useEffect(() => {
+    const s = socket.current;
+    if (!s) return;
+
+    const handleNewIncident = (incoming) => {
+      const formatted = formatLiveIncident(incoming);
+      formatted.isNew = true;
+      setIncidentList(prev => [formatted, ...prev.filter(x => x.id !== formatted.id)]);
+      toast.success(`New incident reported: ${formatted.type} on ${formatted.location}`, { icon: '🚨' });
+    };
+
+    s.on('incident_created', handleNewIncident);
+    return () => {
+      s.off('incident_created', handleNewIncident);
+    };
+  }, [socket]);
+
   // ── Chart data ────────────────────────────────────────────────────────────
   const causeData = useMemo(() => {
     const counts = {};
-    incidents.forEach(inc => {
+    incidentList.forEach(inc => {
       const cause = inc.cause ?? inc.type ?? 'Other';
       counts[cause] = (counts[cause] ?? 0) + 1;
     });
     return Object.entries(counts)
       .map(([cause, count]) => ({ cause, count }))
       .sort((a, b) => b.count - a.count);
-  }, []);
+  }, [incidentList]);
 
-  const total            = incidents.length;
+  const total            = incidentList.length;
   const landslideCount   = causeData.find(d => d.cause === 'Landslide')?.count ?? 0;
   const landslidePercent = total > 0 ? Math.round((landslideCount / total) * 100) : 0;
 
   const severityOrder   = { CRITICAL: 0, WARNING: 1, INFO: 2 };
-  const sortedIncidents = [...incidents].sort(
-    (a, b) => (severityOrder[a.severity] ?? 9) - (severityOrder[b.severity] ?? 9)
-  );
+  const sortedIncidents = useMemo(() => {
+    return [...incidentList].sort((a, b) => {
+      if (a.isNew && !b.isNew) return -1;
+      if (!a.isNew && b.isNew) return 1;
+      return (severityOrder[a.severity] ?? 9) - (severityOrder[b.severity] ?? 9);
+    });
+  }, [incidentList]);
 
   const modalFooter = (
     <>
@@ -229,8 +644,24 @@ export const Incidents = () => {
     <div>
       <PageHeader
         title="Incident Management"
-        description="Monitor and report GIS anomalies and road blockages. Fleet Ops module — illustrative scenario data."
-        actionButton={<button className="btn btn-primary" onClick={() => setIsModalOpen(true)}>+ Report Incident</button>}
+        description="Monitor and report GIS anomalies, roadblocks, and field incidents in real time."
+        actionButton={
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={loadIncidents}
+              disabled={loadingLive}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', fontSize: '0.82rem' }}
+            >
+              <RefreshCw size={13} className={loadingLive ? 'spin' : ''} /> Refresh
+            </button>
+            {canReportIncident && (
+              <button className="btn btn-primary" onClick={() => navigate('/incident-report')}>
+                + Report Incident
+              </button>
+            )}
+          </div>
+        }
       />
       <DataSourceNote />
 
@@ -247,7 +678,7 @@ export const Incidents = () => {
           </div>
         </div>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '18px' }}>
-          Horizontal bars sorted by frequency — highest cause at top
+          Horizontal bars sorted by frequency — live updates from field reports
         </div>
 
         <ResponsiveContainer width="100%" height={causeData.length * 44 + 20}>
@@ -282,20 +713,46 @@ export const Incidents = () => {
           <table>
             <thead>
               <tr>
-                <th>ID</th>
+                <th>Field Officer</th>
                 <th>Type</th>
                 <th>Root Cause</th>
                 <th>Location</th>
                 <th>Severity</th>
                 <th>Time Reported</th>
                 <th>Status</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {sortedIncidents.map(inc => (
-                <tr key={inc.id}>
-                  <td style={{ fontWeight: 600 }}>{inc.id}</td>
-                  <td>{inc.type}</td>
+                <tr key={inc.rawId || inc.id} style={inc.isNew ? { background: 'rgba(239, 68, 68, 0.05)' } : undefined}>
+                  <td style={{ padding: '10px 16px', fontSize: '0.82rem' }}>
+                    <div style={{ fontWeight: 600, color: 'var(--ink)' }}>{inc.officerName}</div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--slate)', marginTop: 2 }}>{inc.id}</div>
+                    {inc.isNew && (
+                      <span style={{
+                        display: 'inline-block', marginTop: 4,
+                        fontSize: '0.62rem',
+                        fontWeight: 800,
+                        color: '#ef4444',
+                        background: 'rgba(239,68,68,0.14)',
+                        padding: '1px 5px',
+                        borderRadius: 4,
+                        border: '1px solid rgba(239,68,68,0.35)',
+                        letterSpacing: '0.04em',
+                      }}>
+                        NEW
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <div style={{ fontWeight: 500 }}>{inc.type}</div>
+                    {inc.trafficCondition && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                        Traffic: {inc.trafficCondition}
+                      </div>
+                    )}
+                  </td>
                   <td>
                     <span style={{
                       fontSize: '0.75rem', padding: '2px 8px', borderRadius: 8,
@@ -307,16 +764,76 @@ export const Incidents = () => {
                       {inc.cause ?? inc.type}
                     </span>
                   </td>
-                  <td>{inc.location}</td>
-                  <td><Badge>{inc.severity}</Badge></td>
+                  <td>
+                    <div>{inc.location}</div>
+                    {inc.roadBlock && inc.roadBlock !== 'none' && (
+                      <div style={{ fontSize: '0.7rem', color: '#ef4444', fontWeight: 600 }}>
+                        Blockage: {inc.roadBlock.toUpperCase()}
+                      </div>
+                    )}
+                    {(inc.slope != null || inc.rainfall != null) && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--slate)', marginTop: 2 }}>
+                        {inc.slope != null ? `Slope: ${inc.slope}°` : ''}
+                        {inc.slope != null && inc.rainfall != null ? ' · ' : ''}
+                        {inc.rainfall != null ? `Rain: ${inc.rainfall}mm` : ''}
+                      </div>
+                    )}
+                  </td>
+                  <td><Badge type={inc.severity === 'CRITICAL' ? 'danger' : inc.severity === 'WARNING' ? 'warning' : 'default'}>{inc.severity}</Badge></td>
                   <td>{inc.time}</td>
-                  <td><Badge>{t(inc.status) || inc.status}</Badge></td>
+                  <td><Badge type={inc.status === 'ACTIVE' ? 'danger' : 'default'}>{t(inc.status) || inc.status}</Badge></td>
+                  <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      {(inc.lat != null || inc.isLive) && (
+                        <button
+                          onClick={() => setMapTarget(inc)}
+                          title="View on Map"
+                          style={{
+                            padding: '4px 8px', borderRadius: 6,
+                            background: 'linear-gradient(135deg,#0284c7,#0ea5e9)',
+                            color: '#fff', border: 'none',
+                            fontSize: '0.72rem', fontWeight: 700,
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                            boxShadow: '0 1px 6px rgba(14,165,233,0.3)',
+                          }}
+                        >
+                          <Eye size={11} /> View
+                        </button>
+                      )}
+                      <button
+                        onClick={() => navigate(`/chat?incidentId=${inc.rawId || inc.id}&officer=${encodeURIComponent(inc.officerName || 'Field Officer')}`)}
+                        title="Message reporting officer"
+                        style={{
+                          padding: '4px 8px', borderRadius: 6,
+                          background: 'var(--sky-tint)',
+                          color: 'var(--sky-dark)',
+                          border: '1px solid var(--sky-tint-2)',
+                          fontSize: '0.72rem', fontWeight: 600,
+                          cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4,
+                        }}
+                      >
+                        <MessageSquare size={11} /> Chat
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Incident Map Modal */}
+      {mapTarget && (
+        <IncidentMapModal
+          incident={mapTarget}
+          onClose={() => setMapTarget(null)}
+          onMessageOfficer={(inc) => {
+            setMapTarget(null);
+            navigate(`/chat?incidentId=${inc.rawId || inc.id}&officer=${encodeURIComponent(inc.officerName || 'Field Officer')}`);
+          }}
+        />
+      )}
 
       {/* Report Modal */}
       <Modal isOpen={isModalOpen} onClose={_resetForm} title="Report New Incident" footer={modalFooter}>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardKPIs, vehicles, roads, incidents } from '../data/mockData';
-import { api } from '../services/api';
+import { api, alertsAPI, deliveriesAPI } from '../services/api';
 import { Badge } from '../components/common/Badge';
 import { MapPanel } from '../components/map/MapPanel';
 import { useUserLocation } from '../hooks/useUserLocation';
@@ -336,23 +336,41 @@ const LocationBanner = ({ status, risk, requestLocation, setManualCoords }) => {
 export const Dashboard = () => {
   const { coords, risk, status, requestLocation, setManualCoords } = useUserLocation();
   const [liveAlerts, setLiveAlerts] = useState([]);
+  const [liveDeliveries, setLiveDeliveries] = useState([]);
 
   // Trigger location request on mount
   useEffect(() => { requestLocation(); }, []);
 
-  // Fix #5 — Load live alerts (30s polling) to drive the side panel + KPI count
+  // Load live alerts (60s polling) — all roles see alerts, auth header sent via alertsAPI
   useEffect(() => {
-    api.getAlerts().then(setLiveAlerts).catch(() => {});
+    alertsAPI.getAll().then(setLiveAlerts).catch(() => {});
     const id = setInterval(() => {
-      api.getAlerts().then(setLiveAlerts).catch(() => {});
-    }, 30000);
+      alertsAPI.getAll().then(setLiveAlerts).catch(() => {});
+    }, 60000);
     return () => clearInterval(id);
   }, []);
 
-  // Fix #5 — Build KPI strip with real alert count substituted in
+  // Load live deliveries (60s polling)
+  useEffect(() => {
+    deliveriesAPI.getAll().then(setLiveDeliveries).catch(() => {});
+    const id = setInterval(() => {
+      deliveriesAPI.getAll().then(setLiveDeliveries).catch(() => {});
+    }, 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Build KPI strip with real alert and delivery counts
   const kpiList = dashboardKPIs.map(kpi => {
     if (kpi.icon === 'bell') {
       return { ...kpi, value: String(liveAlerts.length), label: 'Risk Alerts (Real-time)' };
+    }
+    if (kpi.icon === 'truck' || kpi.label?.toLowerCase().includes('deliver') || kpi.label?.toLowerCase().includes('vehicle')) {
+      return {
+        ...kpi,
+        label: 'Active Deliveries',
+        value: String(liveDeliveries.length || 0),
+        change: liveDeliveries.length > 0 ? `${liveDeliveries.filter(d => d.status === 'IN TRANSIT' || d.status === 'ACTIVE').length} In Transit` : kpi.change,
+      };
     }
     return kpi;
   });
@@ -360,14 +378,14 @@ export const Dashboard = () => {
   const sideAlerts = liveAlerts.length > 0
     ? liveAlerts.slice(0, 4).map(a => ({
         id: a._id,
-        level: a.riskCategory === 'Very High' ? 'CRITICAL' : 'WARNING',
+        level: (a.severity === 'CRITICAL' || a.severity === 'HIGH') ? 'CRITICAL' : 'WARNING',
         message: a.message,
-        time: new Date(a.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        time: a.timestamp ? new Date(a.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
       }))
     : [];
 
-  // Pass coords to map whenever we have them — GPS is valid even if risk engine is down
-  const mapCoords = coords;
+  // Default to Dima Hasao (NER hub) on dashboard map; user GPS is kept in Route Planner per user specification
+  const mapCoords = null;
 
   // ── Popover item builders ────────────────────────────────────────────────
   const SEVERITY_BADGE_COLOR = { CRITICAL: 'var(--danger)', WARNING: 'var(--warning)', INFO: 'var(--success)' };
@@ -375,23 +393,39 @@ export const Dashboard = () => {
   const STATUS_COLOR         = { 'IN TRANSIT': 'var(--success)', DELAYED: 'var(--warning)', 'RE-ROUTING': 'var(--danger)' };
 
   const kpiPopovers = {
+    'Active Deliveries': {
+      href: '/deliveries',
+      items: (liveDeliveries.length > 0 ? liveDeliveries : vehicles).map(d => ({
+        primary: d.id || d.deliveryId || d.vehicle,
+        secondary: `${d.cargo || 'Cargo'} → ${d.destination || 'Destination'}`,
+        badge: d.status || 'IN TRANSIT',
+        badgeColor: STATUS_COLOR[d.status] || 'var(--success)',
+      })),
+    },
     'Active Vehicles': {
-      href: '/vehicles',
-      items: vehicles.map(v => ({
-        primary: v.id,
-        secondary: `${v.cargo} → ${v.destination}`,
-        badge: v.status,
-        badgeColor: STATUS_COLOR[v.status],
+      href: '/deliveries',
+      items: (liveDeliveries.length > 0 ? liveDeliveries : vehicles).map(d => ({
+        primary: d.id || d.deliveryId || d.vehicle,
+        secondary: `${d.cargo || 'Cargo'} → ${d.destination || 'Destination'}`,
+        badge: d.status || 'IN TRANSIT',
+        badgeColor: STATUS_COLOR[d.status] || 'var(--success)',
       })),
     },
     'Vehicles Delayed': {
       href: '/vehicles',
-      items: vehicles.filter(v => v.status === 'DELAYED' || v.status === 'RE-ROUTING').map(v => ({
-        primary: v.id,
-        secondary: `→ ${v.destination}  ·  ETA ${v.eta}`,
-        badge: v.status,
-        badgeColor: 'var(--warning)',
-      })),
+      items: vehicles.filter(v => v.status === 'DELAYED' || v.status === 'RE-ROUTING').map(v => {
+        const isVan104 = v.id === 'VAN-104';
+        const secText = isVan104
+          ? '→ Imphal Hospital · ETA: 4h 10m (+45m Detour Delay) · Landslide Detour'
+          : `→ ${v.destination} · ETA ${v.eta}${v.delayReason ? ` · ${v.delayReason}` : ''}`;
+        const badgeText = isVan104 ? 'DELAYED (+45m Detour)' : (v.delayMinutes ? `+${v.delayMinutes}m DELAY` : v.status);
+        return {
+          primary: `${v.id} (${v.cargo})`,
+          secondary: secText,
+          badge: badgeText,
+          badgeColor: 'var(--warning)',
+        };
+      }),
     },
     'Blocked Roads': {
       href: '/roads',
@@ -460,6 +494,23 @@ export const Dashboard = () => {
       {/* Main Map Area */}
       <div className="card map-section" style={{ position: 'relative', padding: 0, overflow: 'hidden' }}>
         <MapPanel userCoords={mapCoords} />
+
+        {/* Road Risk Legend */}
+        <div className="map-legend">
+          <h4>Road Risk Level</h4>
+          <div className="map-legend-item">
+            <div className="map-legend-line" style={{ background: '#ef4444' }} />
+            <span>High Risk</span>
+          </div>
+          <div className="map-legend-item">
+            <div className="map-legend-line" style={{ background: '#f59e0b' }} />
+            <span>Caution</span>
+          </div>
+          <div className="map-legend-item">
+            <div className="map-legend-line" style={{ background: '#22c55e' }} />
+            <span>Clear</span>
+          </div>
+        </div>
 
         {/* "Plan a Route" CTA — top-right corner of the map */}
         <div style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 1000 }}>
@@ -537,19 +588,37 @@ export const Dashboard = () => {
 
         <div className="card" style={{ flex: 1 }}>
           <div className="card-header">
-            <div className="card-title">Active Vehicles Summary</div>
+            <div className="card-title">Active Deliveries Summary</div>
           </div>
           <div className="table-container">
             <table>
               <tbody>
-                {vehicles.slice(0, 3).map(v => (
+                {(liveDeliveries.length > 0 ? liveDeliveries : vehicles).slice(0, 3).map(v => (
                   <tr key={v.id}>
                     <td>
-                      <div style={{ fontWeight: 500 }}>{v.id}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{v.cargo}</div>
+                      <div style={{ fontWeight: 500 }}>{v.id} {v.vehicle ? `(${v.vehicle})` : ''}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{v.cargo} → {v.destination}</div>
                     </td>
                     <td style={{ textAlign: 'right' }}>
-                      <Badge>{v.status}</Badge>
+                      {v.status === 'DELAYED' ? (
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          padding: '2px 7px',
+                          borderRadius: 6,
+                          background: 'rgba(245, 158, 11, 0.15)',
+                          color: '#b45309',
+                          border: '1px solid rgba(245, 158, 11, 0.4)',
+                          fontWeight: 700,
+                          fontSize: '0.72rem',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {v.id === 'VAN-104' || v.id === 'DEL-1043' ? 'DELAYED (+45m Detour)' : `DELAYED ${v.delayMinutes ? `(+${v.delayMinutes}m)` : ''}`}
+                        </span>
+                      ) : (
+                        <Badge>{v.status || 'IN TRANSIT'}</Badge>
+                      )}
                     </td>
                   </tr>
                 ))}

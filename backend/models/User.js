@@ -51,7 +51,8 @@ const userSchema =
                 "PENDING",
                 "APPROVED",
                 "REJECTED",
-                "INACTIVE"
+                "INACTIVE",
+                "DISABLED"
             ],
 
             default:
@@ -167,6 +168,26 @@ const userSchema =
         approvedAt: {
 
             type: Date
+
+        },
+
+        profilePhotoUrl: {
+
+            type: String
+
+        },
+
+        dateOfBirth: {
+
+            type: Date
+
+        },
+
+        gender: {
+
+            type: String,
+
+            enum: ['Male', 'Female', 'Other', 'Prefer not to say']
 
         }
 

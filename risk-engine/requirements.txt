@@ -1,9 +1,9 @@
-fastapi
-uvicorn[standard]
-rasterio
-xarray
-netCDF4
-joblib
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+rasterio==1.5.1
+xarray==2026.7.0
+netCDF4==1.7.4
+joblib==1.6.0
 scikit-learn==1.6.1
-pandas
-numpy
+pandas==3.0.5
+numpy==2.5.3

@@ -13,9 +13,11 @@ import { Login } from './pages/Login';
 import { RegisterFieldOfficer } from './pages/RegisterFieldOfficer';
 import { RegisterVehicleOperator } from './pages/RegisterVehicleOperator';
 import { AccountDetails } from './pages/AccountDetails';
-import { AdminApprovals } from './pages/AdminApprovals';
 import { Districts } from './pages/Districts';
 import { CriticalRoads } from './pages/CriticalRoads';
+import { Personnel } from './pages/Personnel';
+import { IncidentReport } from './pages/IncidentReport';
+import { Chat } from './pages/Chat';
 import { auth } from './services/api';
 import { LanguageProvider } from './i18n/LanguageContext';
 
@@ -34,6 +36,13 @@ const AdminRoute = ({ children }) => {
   if (!auth.isLoggedIn()) return <Navigate to="/login" replace />;
   const user = auth.getUser();
   return user?.role === 'ADMIN' ? children : <Navigate to="/dashboard" replace />;
+};
+
+// Role-based route — redirects to /dashboard if user's role not in allowedRoles
+const RoleRoute = ({ children, allowedRoles }) => {
+  if (!auth.isLoggedIn()) return <Navigate to="/login" replace />;
+  const user = auth.getUser();
+  return allowedRoles.includes(user?.role) ? children : <Navigate to="/dashboard" replace />;
 };
 
 function App() {
@@ -57,22 +66,27 @@ function App() {
           <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard"          element={<Dashboard />} />
-            <Route path="vehicles"           element={<Vehicles />} />
+            <Route path="vehicles"           element={<AdminRoute><Vehicles /></AdminRoute>} />
             <Route path="roads"              element={<Roads />} />
             <Route path="incidents"          element={<Incidents />} />
             <Route path="deliveries"         element={<Deliveries />} />
             <Route path="alerts"             element={<Alerts />} />
             <Route path="route-planner"      element={<RoutePlanner />} />
+            <Route path="planner"            element={<RoutePlanner />} />
             <Route path="districts"          element={<Districts />} />
             <Route path="settings"           element={<Settings />} />
             {/* Personnel — admin creates accounts */}
             <Route path="register-officer"   element={<AdminRoute><RegisterFieldOfficer /></AdminRoute>} />
             <Route path="register-operator"  element={<AdminRoute><RegisterVehicleOperator /></AdminRoute>} />
             <Route path="account"            element={<AccountDetails />} />
-            {/* Admin only */}
-            <Route path="admin/approvals"    element={<AdminApprovals />} />
             {/* Phase 4: Critical roads analysis */}
             <Route path="critical-roads"     element={<CriticalRoads />} />
+            {/* Phase 6: Personnel management (admin only) */}
+            <Route path="personnel"           element={<AdminRoute><Personnel /></AdminRoute>} />
+            {/* Field officer incident reporting — admin + field officer only */}
+            <Route path="incident-report"     element={<RoleRoute allowedRoles={['ADMIN','FIELD_OFFICER']}><IncidentReport /></RoleRoute>} />
+            {/* Field Officer <-> Admin Live Chat */}
+            <Route path="chat"                element={<RoleRoute allowedRoles={['ADMIN','FIELD_OFFICER']}><Chat /></RoleRoute>} />
           </Route>
 
           {/* Catch-all */}

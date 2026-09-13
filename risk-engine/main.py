@@ -5,11 +5,12 @@ FastAPI service that loads all geospatial rasters + ML model ONCE at startup
 and exposes GET /predict?lat=&lon= for instant risk inference.
 
 Start with:
-    uvicorn main:app --reload --port 8000
+    uvicorn main:app --host 0.0.0.0 --port $PORT
 """
 
 from pathlib import Path
 from typing import List
+import os
 import time
 import math
 
@@ -305,16 +306,30 @@ app = FastAPI(
     version="1.1.0",
 )
 
+# ── CORS ──────────────────────────────────────────────────────────────────────
+# Set ALLOWED_ORIGIN in the hosting provider's environment variables to your
+# deployed Vercel / Netlify frontend URL (e.g. https://cloud9-ner.vercel.app).
+# Multiple origins can be specified as a comma-separated list:
+#   ALLOWED_ORIGIN=https://cloud9-ner.vercel.app,https://cloud9-staging.vercel.app
+# The localhost origins below are always included for local development.
+_LOCAL_ORIGINS = [
+    "http://localhost:1707",
+    "http://localhost:1710",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:1710",
+]
+_env_origins = [
+    o.strip()
+    for o in os.environ.get("ALLOWED_ORIGIN", "").split(",")
+    if o.strip()
+]
+_CORS_ORIGINS = list(dict.fromkeys(_env_origins + _LOCAL_ORIGINS))  # deduplicated, env first
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:1707",
-        "http://localhost:1710",
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:1710",
-    ],
+    allow_origins=_CORS_ORIGINS,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
