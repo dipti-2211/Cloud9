@@ -67,6 +67,13 @@ const chatRoutes       = require("./routes/chatRoutes");
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const JWT_SECRET      = process.env.JWT_SECRET  || "supersecretjwtkey_ner_logistics_2026";
+if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
+  console.warn(
+    "[SECURITY WARNING] JWT_SECRET is not set in the environment. " +
+    "The default development secret is being used. " +
+    "Set JWT_SECRET in your hosting provider's environment variables before deploying."
+  );
+}
 const RISK_ENGINE_URL = process.env.RISK_ENGINE_URL || "http://localhost:8000";
 
 // ── Photo upload (disk storage) ────────────────────────────────────────────

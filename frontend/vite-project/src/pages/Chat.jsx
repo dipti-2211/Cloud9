@@ -10,6 +10,8 @@ import { PageHeader } from '../components/common/PageHeader';
 import { Badge } from '../components/common/Badge';
 import toast from 'react-hot-toast';
 
+const BASE = import.meta.env.VITE_API_URL || 'http://localhost:1710';
+
 const QUICK_PROMPTS = [
   "Casualties or injuries reported?",
   "Estimated time to clear road?",
@@ -918,9 +920,9 @@ export const Chat = () => {
                           {m.attachmentUrl && (
                             <div style={{ marginBottom: m.text ? 8 : 0 }}>
                               <img
-                                src={m.attachmentUrl.startsWith('http') ? m.attachmentUrl : `http://localhost:1710${m.attachmentUrl}`}
+                                src={m.attachmentUrl.startsWith('http') ? m.attachmentUrl : `${BASE}${m.attachmentUrl}`}
                                 alt="Chat attachment"
-                                onClick={() => setPreviewModalImg(m.attachmentUrl.startsWith('http') ? m.attachmentUrl : `http://localhost:1710${m.attachmentUrl}`)}
+                                onClick={() => setPreviewModalImg(m.attachmentUrl.startsWith('http') ? m.attachmentUrl : `${BASE}${m.attachmentUrl}`)}
                                 style={{
                                   maxWidth: '100%',
                                   maxHeight: 240,
