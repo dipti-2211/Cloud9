@@ -109,7 +109,7 @@ const io = new Server(server, {
         origin: function (origin, callback) {
             if (!origin) return callback(null, true);
             if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
-            if (/\.(vercel|onrender|railway|netlify)\.app$/.test(origin)) return callback(null, true);
+            if (/\.(vercel|railway|netlify)\.app$/.test(origin) || /\.onrender\.(com|app)$/.test(origin)) return callback(null, true);
             return callback(new Error("Not allowed by CORS (socket.io)"));
         },
         credentials: true,
@@ -154,7 +154,7 @@ app.use(cors({
         if (!origin) return callback(null, true);
         if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
         if (allowedOrigins.includes(origin)) return callback(null, true);
-        if (/\.(vercel|onrender|railway|netlify)\.app$/.test(origin)) return callback(null, true);
+        if (/\.(vercel|railway|netlify)\.app$/.test(origin) || /\.onrender\.(com|app)$/.test(origin)) return callback(null, true);
         return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
